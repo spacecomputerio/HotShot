@@ -253,7 +253,7 @@ async fn start_consensus<
     // Start a new tokio tcp listener that acts as RPC server, exposing the following functions:
     // * send_txs - accepts a single arg 'txs' (Vec<Vec<u8>>)
     let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel(100);
-    let rpc_addr = format!(":{}", rpc_port);
+    let rpc_addr = format!(":{rpc_port}",);
     let listener = TcpListener::bind(&rpc_addr).await?;
     tracing::info!("RPC Listening on: {}", &rpc_addr);
     // Spawn the task to wait for events
@@ -405,6 +405,8 @@ async fn start_consensus<
     Ok(join_handle)
 }
 
+/// handles a new RPC connection:
+/// * 'send_txs' - accepts multiple txs and sends them over to the main event loop
 async fn handle_rpc_connection(
     mut stream: TcpStream,
     tx_send: tokio::sync::mpsc::Sender<Vec<u8>>,
