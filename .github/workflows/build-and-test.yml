@@ -3,12 +3,10 @@ name: Build and Test
 on:
   push:
     branches:
-      - "develop"
+      - "dev"
       - "main"
   pull_request:
-  schedule:
-    - cron: "0 0 * * 1"
-  workflow_dispatch:
+
 
 concurrency:
   group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' && github.run_number) || github.ref }}
