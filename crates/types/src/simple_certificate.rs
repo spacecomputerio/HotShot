@@ -24,8 +24,8 @@ use crate::{
     data::serialize_signature2,
     message::UpgradeLock,
     simple_vote::{
-        DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
-        TimeoutData, TimeoutData2, UpgradeProposalData, VersionedVoteData, ViewSyncCommitData,
+        DaData, DaData2, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker, TimeoutData,
+        TimeoutData2, UpgradeProposalData, VersionedVoteData, ViewSyncCommitData,
         ViewSyncCommitData2, ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData,
         ViewSyncPreCommitData2, Voteable,
     },
@@ -42,7 +42,7 @@ pub trait Threshold<TYPES: NodeType> {
     /// Calculate a threshold based on the membership
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64;
 }
 
@@ -53,7 +53,7 @@ pub struct SuccessThreshold {}
 impl<TYPES: NodeType> Threshold<TYPES> for SuccessThreshold {
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64 {
         membership.success_threshold(epoch).into()
     }
@@ -66,7 +66,7 @@ pub struct OneHonestThreshold {}
 impl<TYPES: NodeType> Threshold<TYPES> for OneHonestThreshold {
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64 {
         membership.failure_threshold(epoch).into()
     }
@@ -79,7 +79,7 @@ pub struct UpgradeThreshold {}
 impl<TYPES: NodeType> Threshold<TYPES> for UpgradeThreshold {
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64 {
         membership.upgrade_threshold(epoch).into()
     }
@@ -169,29 +169,28 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
         threshold: NonZeroU64,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<()> {
+    ) -> bool {
         if self.view_number == TYPES::View::genesis() {
-            return Ok(());
+            return true;
         }
         let real_qc_pp = <TYPES::SignatureKey as SignatureKey>::public_parameter(
             stake_table,
             U256::from(u64::from(threshold)),
         );
-        let commit = self.data_commitment(upgrade_lock).await?;
-
+        let Ok(commit) = self.data_commitment(upgrade_lock).await else {
+            return false;
+        };
         <TYPES::SignatureKey as SignatureKey>::check(
             &real_qc_pp,
             commit.as_ref(),
             self.signatures.as_ref().unwrap(),
         )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {}", e))
     }
     /// Proxy's to `Membership.stake`
     fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         membership.da_stake(pub_key, epoch)
     }
@@ -199,20 +198,20 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     /// Proxy's to `Membership.da_stake_table`
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         membership.da_stake_table(epoch)
     }
     /// Proxy's to `Membership.da_total_nodes`
     fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> usize {
         membership.da_total_nodes(epoch)
     }
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64 {
         membership.da_success_threshold(epoch).into()
     }
@@ -258,29 +257,28 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
         threshold: NonZeroU64,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<()> {
+    ) -> bool {
         if self.view_number == TYPES::View::genesis() {
-            return Ok(());
+            return true;
         }
         let real_qc_pp = <TYPES::SignatureKey as SignatureKey>::public_parameter(
             stake_table,
             U256::from(u64::from(threshold)),
         );
-        let commit = self.data_commitment(upgrade_lock).await?;
-
+        let Ok(commit) = self.data_commitment(upgrade_lock).await else {
+            return false;
+        };
         <TYPES::SignatureKey as SignatureKey>::check(
             &real_qc_pp,
             commit.as_ref(),
             self.signatures.as_ref().unwrap(),
         )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {}", e))
     }
     /// Proxy's to `Membership.stake`
     fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         membership.da_stake(pub_key, epoch)
     }
@@ -288,20 +286,20 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     /// Proxy's to `Membership.da_stake_table`
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         membership.da_stake_table(epoch)
     }
     /// Proxy's to `Membership.da_total_nodes`
     fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> usize {
         membership.da_total_nodes(epoch)
     }
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64 {
         membership.da_success_threshold(epoch).into()
     }
@@ -350,27 +348,26 @@ impl<
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
         threshold: NonZeroU64,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> Result<()> {
+    ) -> bool {
         if self.view_number == TYPES::View::genesis() {
-            return Ok(());
+            return true;
         }
         let real_qc_pp = <TYPES::SignatureKey as SignatureKey>::public_parameter(
             stake_table,
             U256::from(u64::from(threshold)),
         );
-        let commit = self.data_commitment(upgrade_lock).await?;
-
+        let Ok(commit) = self.data_commitment(upgrade_lock).await else {
+            return false;
+        };
         <TYPES::SignatureKey as SignatureKey>::check(
             &real_qc_pp,
             commit.as_ref(),
             self.signatures.as_ref().unwrap(),
         )
-        .wrap()
-        .context(|e| warn!("Signature check failed: {}", e))
     }
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64 {
         THRESHOLD::threshold(membership, epoch)
     }
@@ -378,14 +375,14 @@ impl<
     fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         membership.stake(pub_key, epoch)
     }
 
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         membership.stake_table(epoch)
     }
@@ -393,7 +390,7 @@ impl<
     /// Proxy's to `Membership.total_nodes`
     fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> usize {
         membership.total_nodes(epoch)
     }
@@ -420,18 +417,6 @@ impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES> + 'static, THRESHOLD: Threshold<
         self.view_number
     }
 }
-
-impl<
-        TYPES: NodeType,
-        VOTEABLE: Voteable<TYPES> + HasEpoch<TYPES> + 'static,
-        THRESHOLD: Threshold<TYPES>,
-    > HasEpoch<TYPES> for SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
-{
-    fn epoch(&self) -> Option<TYPES::Epoch> {
-        self.data.epoch()
-    }
-}
-
 impl<TYPES: NodeType> Display for QuorumCertificate<TYPES> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "view: {:?}", self.view_number)
@@ -467,7 +452,7 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
     pub async fn validate<V: Versions>(
         upgrade_certificate: &Option<Self>,
         membership: &RwLock<TYPES::Membership>,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
         if let Some(ref cert) = upgrade_certificate {
@@ -476,16 +461,19 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
             let membership_upgrade_threshold = membership_reader.upgrade_threshold(epoch);
             drop(membership_reader);
 
-            cert.is_valid_cert(
-                membership_stake_table,
-                membership_upgrade_threshold,
-                upgrade_lock,
-            )
-            .await
-            .context(|e| warn!("Invalid upgrade certificate: {}", e))?;
+            ensure!(
+                cert.is_valid_cert(
+                    membership_stake_table,
+                    membership_upgrade_threshold,
+                    upgrade_lock
+                )
+                .await,
+                "Invalid upgrade certificate."
+            );
+            Ok(())
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// Given an upgrade certificate and a view, tests whether the view is in the period
@@ -501,7 +489,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         let bytes: [u8; 32] = self.data.leaf_commit.into();
         let data = QuorumData2 {
             leaf_commit: Commitment::from_raw(bytes),
-            epoch: None,
+            epoch: TYPES::Epoch::genesis(),
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -543,7 +531,7 @@ impl<TYPES: NodeType> DaCertificate<TYPES> {
     pub fn to_dac2(self) -> DaCertificate2<TYPES> {
         let data = DaData2 {
             payload_commit: self.data.payload_commit,
-            epoch: None,
+            epoch: TYPES::Epoch::new(0),
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -585,7 +573,7 @@ impl<TYPES: NodeType> ViewSyncPreCommitCertificate<TYPES> {
         let data = ViewSyncPreCommitData2 {
             relay: self.data.relay,
             round: self.data.round,
-            epoch: None,
+            epoch: TYPES::Epoch::new(0),
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -628,7 +616,7 @@ impl<TYPES: NodeType> ViewSyncCommitCertificate<TYPES> {
         let data = ViewSyncCommitData2 {
             relay: self.data.relay,
             round: self.data.round,
-            epoch: None,
+            epoch: TYPES::Epoch::new(0),
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -671,7 +659,7 @@ impl<TYPES: NodeType> ViewSyncFinalizeCertificate<TYPES> {
         let data = ViewSyncFinalizeData2 {
             relay: self.data.relay,
             round: self.data.round,
-            epoch: None,
+            epoch: TYPES::Epoch::new(0),
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -710,10 +698,10 @@ impl<TYPES: NodeType> ViewSyncFinalizeCertificate2<TYPES> {
 
 impl<TYPES: NodeType> TimeoutCertificate<TYPES> {
     /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_tc2(self) -> TimeoutCertificate2<TYPES> {
+    pub fn to_vsc2(self) -> TimeoutCertificate2<TYPES> {
         let data = TimeoutData2 {
             view: self.data.view,
-            epoch: None,
+            epoch: TYPES::Epoch::new(0),
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();
@@ -731,7 +719,7 @@ impl<TYPES: NodeType> TimeoutCertificate<TYPES> {
 
 impl<TYPES: NodeType> TimeoutCertificate2<TYPES> {
     /// Convert a `DaCertificate` into a `DaCertificate2`
-    pub fn to_tc(self) -> TimeoutCertificate<TYPES> {
+    pub fn to_vsc(self) -> TimeoutCertificate<TYPES> {
         let data = TimeoutData {
             view: self.data.view,
         };

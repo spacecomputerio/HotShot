@@ -262,7 +262,7 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     async fn update_view<'a, TYPES>(
         &'a self,
         _view: u64,
-        _epoch: Option<u64>,
+        _epoch: u64,
         _membership: Arc<RwLock<TYPES::Membership>>,
     ) where
         TYPES: NodeType<SignatureKey = K> + 'a,
@@ -288,8 +288,6 @@ where
     #[allow(clippy::type_complexity)]
     fn generator(
         expected_node_count: usize,
-        num_bootstrap: usize,
-        network_id: usize,
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,

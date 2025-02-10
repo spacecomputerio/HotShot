@@ -178,9 +178,8 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     /// Get the stake table for the current view
     fn stake_table(
         &self,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.stake_table.0.clone()
         } else {
@@ -191,9 +190,8 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     /// Get the stake table for the current view
     fn da_stake_table(
         &self,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.da_stake_table.0.clone()
         } else {
@@ -205,9 +203,8 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn committee_members(
         &self,
         _view_number: <TYPES as NodeType>::View,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> std::collections::BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.stake_table
                 .0
@@ -227,9 +224,8 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn da_committee_members(
         &self,
         _view_number: <TYPES as NodeType>::View,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> std::collections::BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.da_stake_table
                 .0
@@ -249,9 +245,8 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn committee_leaders(
         &self,
         _view_number: <TYPES as NodeType>::View,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> std::collections::BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.eligible_leaders
                 .0
@@ -271,10 +266,9 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         // Only return the stake if it is above zero
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.indexed_stake_table.0.get(pub_key).cloned()
         } else {
@@ -286,10 +280,9 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
         // Only return the stake if it is above zero
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.indexed_da_stake_table.0.get(pub_key).cloned()
         } else {
@@ -301,9 +294,8 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn has_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> bool {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.indexed_stake_table
                 .0
@@ -321,9 +313,8 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     fn has_da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> bool {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.indexed_da_stake_table
                 .0
@@ -340,10 +331,9 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     /// Index the vector of public keys with the current view number
     fn lookup_leader(
         &self,
-        view_number: <TYPES as NodeType>::View,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
+        view_number: TYPES::View,
+        epoch: <TYPES as NodeType>::Epoch,
     ) -> Result<TYPES::SignatureKey> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             #[allow(clippy::cast_possible_truncation)]
             let index = *view_number as usize % self.eligible_leaders.0.len();
@@ -358,8 +348,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the total number of nodes in the committee
-    fn total_nodes(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
+    fn total_nodes(&self, epoch: <TYPES as NodeType>::Epoch) -> usize {
         if *epoch != 0 && *epoch % 2 == 0 {
             self.stake_table.0.len()
         } else {
@@ -368,8 +357,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the total number of DA nodes in the committee
-    fn da_total_nodes(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
+    fn da_total_nodes(&self, epoch: <TYPES as NodeType>::Epoch) -> usize {
         if *epoch != 0 && *epoch % 2 == 0 {
             self.da_stake_table.0.len()
         } else {
@@ -378,8 +366,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
+    fn success_threshold(&self, epoch: TYPES::Epoch) -> NonZeroU64 {
         if *epoch != 0 && *epoch % 2 == 0 {
             NonZeroU64::new(((self.stake_table.0.len() as u64 * 2) / 3) + 1).unwrap()
         } else {
@@ -388,8 +375,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> NonZeroU64 {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
+    fn da_success_threshold(&self, epoch: TYPES::Epoch) -> NonZeroU64 {
         if *epoch != 0 && *epoch % 2 == 0 {
             NonZeroU64::new(((self.da_stake_table.0.len() as u64 * 2) / 3) + 1).unwrap()
         } else {
@@ -398,8 +384,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
+    fn failure_threshold(&self, epoch: TYPES::Epoch) -> NonZeroU64 {
         if *epoch != 0 && *epoch % 2 == 0 {
             NonZeroU64::new(((self.stake_table.0.len() as u64) / 3) + 1).unwrap()
         } else {
@@ -408,8 +393,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
+    fn upgrade_threshold(&self, epoch: TYPES::Epoch) -> NonZeroU64 {
         if *epoch != 0 && *epoch % 2 == 0 {
             NonZeroU64::new(max(
                 (self.stake_table.0.len() as u64 * 9) / 10,

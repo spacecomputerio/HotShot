@@ -26,14 +26,12 @@ pub mod traits;
 pub mod types;
 
 pub mod tasks;
-use hotshot_types::data::QuorumProposalWrapper;
 
 /// Contains helper functions for the crate
 pub mod helpers;
 
 use std::{
     collections::{BTreeMap, HashMap},
-    num::NonZeroUsize,
     sync::Arc,
     time::Duration,
 };
@@ -48,7 +46,7 @@ use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 /// Reexport error type
 pub use hotshot_types::error::HotShotError;
 use hotshot_types::{
-    consensus::{Consensus, ConsensusMetricsValue, OuterConsensus, VidShares, View, ViewInner},
+    consensus::{Consensus, ConsensusMetricsValue, OuterConsensus, View, ViewInner},
     constants::{EVENT_CHANNEL_SIZE, EXTERNAL_EVENT_CHANNEL_SIZE},
     data::{Leaf2, QuorumProposal, QuorumProposal2},
     event::{EventType, LeafInfo},
@@ -62,8 +60,9 @@ use hotshot_types::{
         signature_key::SignatureKey,
         states::ValidatedState,
         storage::Storage,
+        EncodeBytes,
     },
-    utils::{genesis_epoch_from_version, option_epoch_from_block_number},
+    utils::epoch_from_block_number,
     HotShotConfig,
 };
 /// Reexport rand crate
@@ -123,7 +122,7 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     start_view: TYPES::View,
 
     /// The epoch to enter when first starting consensus
-    start_epoch: Option<TYPES::Epoch>,
+    start_epoch: TYPES::Epoch,
 
     /// Access to the output event stream.
     output_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
@@ -140,9 +139,6 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
         Sender<Arc<HotShotEvent<TYPES>>>,
         InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
     ),
-
-    /// uid for instrumentation
-    pub id: u64,
 
     /// Reference to the internal storage for consensus datum.
     pub storage: Arc<RwLock<I::Storage>>,
@@ -173,7 +169,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
             external_event_stream: self.external_event_stream.clone(),
             anchored_leaf: self.anchored_leaf.clone(),
             internal_event_stream: self.internal_event_stream.clone(),
-            id: self.id,
             storage: Arc::clone(&self.storage),
             upgrade_lock: self.upgrade_lock.clone(),
             marketplace_config: self.marketplace_config.clone(),
@@ -197,7 +192,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     pub async fn new(
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        nonce: u64,
         config: HotShotConfig<TYPES::SignatureKey>,
         memberships: Arc<RwLock<TYPES::Membership>>,
         network: Arc<I::Network>,
@@ -226,7 +220,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         Self::new_from_channels(
             public_key,
             private_key,
-            nonce,
             config,
             memberships,
             network,
@@ -237,7 +230,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             internal_chan,
             external_chan,
         )
-        .await
     }
 
     /// Creates a new [`Arc<SystemContext>`] with the given configuration options.
@@ -248,10 +240,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     /// Use this function if you want to use some preexisting channels and to spin up the tasks
     /// and start consensus manually.  Mostly useful for tests
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    pub async fn new_from_channels(
+    pub fn new_from_channels(
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        nonce: u64,
         config: HotShotConfig<TYPES::SignatureKey>,
         memberships: Arc<RwLock<TYPES::Membership>>,
         network: Arc<I::Network>,
@@ -268,7 +259,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         debug!("Creating a new hotshot");
 
         let consensus_metrics = Arc::new(metrics);
-        let anchored_leaf = initializer.anchor_leaf;
+        let anchored_leaf = initializer.inner;
         let instance_state = initializer.instance_state;
 
         let (internal_tx, mut internal_rx) = internal_channel;
@@ -286,17 +277,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         // Get the validated state from the initializer or construct an incomplete one from the
         // block header.
-        let validated_state = initializer.anchor_state;
+        let validated_state = match initializer.validated_state {
+            Some(state) => state,
+            None => Arc::new(TYPES::ValidatedState::from_header(
+                anchored_leaf.block_header(),
+            )),
+        };
 
-        // #3967 REVIEW NOTE: Should this actually be Some()? How do we know?
-        let epoch = option_epoch_from_block_number::<TYPES>(
-            upgrade_lock
-                .epochs_enabled(anchored_leaf.view_number())
-                .await,
+        let epoch = TYPES::Epoch::new(epoch_from_block_number(
             anchored_leaf.height(),
             config.epoch_height,
-        );
-
+        ));
         // Insert the validated state to state map.
         let mut validated_state_map = BTreeMap::default();
         validated_state_map.insert(
@@ -305,7 +296,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 view_inner: ViewInner::Leaf {
                     leaf: anchored_leaf.commit(),
                     state: Arc::clone(&validated_state),
-                    delta: initializer.anchor_state_delta,
+                    delta: initializer.state_delta.clone(),
                     epoch,
                 },
             },
@@ -318,21 +309,29 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let mut saved_payloads = BTreeMap::new();
         saved_leaves.insert(anchored_leaf.commit(), anchored_leaf.clone());
 
-        for (_, leaf) in initializer.undecided_leaves {
+        for leaf in initializer.undecided_leaves {
             saved_leaves.insert(leaf.commit(), leaf.clone());
         }
         if let Some(payload) = anchored_leaf.block_payload() {
-            saved_payloads.insert(anchored_leaf.view_number(), Arc::new(payload));
+            let encoded_txns = payload.encode();
+
+            saved_payloads.insert(anchored_leaf.view_number(), Arc::clone(&encoded_txns));
         }
 
+        let anchored_epoch = if config.epoch_height == 0 {
+            TYPES::Epoch::new(0)
+        } else if anchored_leaf.height() % config.epoch_height == 0 {
+            TYPES::Epoch::new(anchored_leaf.height() / config.epoch_height)
+        } else {
+            TYPES::Epoch::new(anchored_leaf.height() / config.epoch_height + 1)
+        };
         let consensus = Consensus::new(
             validated_state_map,
-            Some(initializer.saved_vid_shares),
             anchored_leaf.view_number(),
-            epoch,
+            anchored_epoch,
             anchored_leaf.view_number(),
             anchored_leaf.view_number(),
-            initializer.last_actioned_view,
+            initializer.actioned_view,
             initializer.saved_proposals,
             saved_leaves,
             saved_payloads,
@@ -349,7 +348,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         external_tx.set_await_active(false);
 
         let inner: Arc<SystemContext<TYPES, I, V>> = Arc::new(SystemContext {
-            id: nonce,
             consensus: OuterConsensus::new(consensus),
             instance_state: Arc::new(instance_state),
             public_key,
@@ -376,7 +374,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     ///
     /// # Panics
     /// Panics if sending genesis fails
-    #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
+    #[instrument(skip_all, target = "SystemContext")]
     pub async fn start_consensus(&self) {
         #[cfg(all(feature = "rewind", not(debug_assertions)))]
         compile_error!("Cannot run rewind in production builds!");
@@ -411,10 +409,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             async move {
                 sleep(Duration::from_millis(next_view_timeout)).await;
                 broadcast_event(
-                    Arc::new(HotShotEvent::Timeout(
-                        start_view + 1,
-                        start_epoch.map(|x| x + 1),
-                    )),
+                    Arc::new(HotShotEvent::Timeout(start_view + 1, start_epoch + 1)),
                     &event_stream,
                 )
                 .await;
@@ -481,7 +476,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     /// # Errors
     ///
     /// Always returns Ok; does not return an error if the transaction couldn't be published to the network
-    #[instrument(skip(self), err, target = "SystemContext", fields(id = self.id))]
+    #[instrument(skip(self), err, target = "SystemContext")]
     pub async fn publish_transaction_async(
         &self,
         transaction: TYPES::Transaction,
@@ -557,7 +552,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     /// Returns a copy of the last decided leaf
     /// # Panics
     /// Panics if internal leaf for consensus is inconsistent
-    #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
+    #[instrument(skip_all, target = "SystemContext")]
     pub async fn decided_leaf(&self) -> Leaf2<TYPES> {
         self.consensus.read().await.decided_leaf()
     }
@@ -568,7 +563,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     /// # Panics
     /// Panics if internal state for consensus is inconsistent
     #[must_use]
-    #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
+    #[instrument(skip_all, target = "SystemContext")]
     pub fn try_decided_leaf(&self) -> Option<Leaf2<TYPES>> {
         self.consensus.try_read().map(|guard| guard.decided_leaf())
     }
@@ -577,7 +572,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     ///
     /// # Panics
     /// Panics if internal state for consensus is inconsistent
-    #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
+    #[instrument(skip_all, target = "SystemContext")]
     pub async fn decided_state(&self) -> Arc<TYPES::ValidatedState> {
         Arc::clone(&self.consensus.read().await.decided_state())
     }
@@ -589,7 +584,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     /// return [`None`] if the requested view has already been decided (but see
     /// [`decided_state`](Self::decided_state)) or if there is no path for the requested
     /// view to ever be decided.
-    #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
+    #[instrument(skip_all, target = "SystemContext")]
     pub async fn state(&self, view: TYPES::View) -> Option<Arc<TYPES::ValidatedState>> {
         self.consensus.read().await.state(view).cloned()
     }
@@ -611,7 +606,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     pub async fn init(
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        node_id: u64,
         config: HotShotConfig<TYPES::SignatureKey>,
         memberships: Arc<RwLock<TYPES::Membership>>,
         network: Arc<I::Network>,
@@ -630,7 +624,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let hotshot = Self::new(
             public_key,
             private_key,
-            node_id,
             config,
             memberships,
             network,
@@ -774,7 +767,6 @@ where
         &'static mut self,
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        nonce: u64,
         config: HotShotConfig<TYPES::SignatureKey>,
         memberships: Arc<RwLock<TYPES::Membership>>,
         network: Arc<I::Network>,
@@ -790,7 +782,6 @@ where
         let left_system_context = SystemContext::new(
             public_key.clone(),
             private_key.clone(),
-            nonce,
             config.clone(),
             Arc::clone(&memberships),
             Arc::clone(&network),
@@ -803,7 +794,6 @@ where
         let right_system_context = SystemContext::new(
             public_key,
             private_key,
-            nonce,
             config,
             memberships,
             network,
@@ -957,8 +947,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TwinsHandlerSta
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusApi<TYPES, I>
     for SystemContextHandle<TYPES, I, V>
 {
-    fn total_nodes(&self) -> NonZeroUsize {
-        self.hotshot.config.num_nodes_with_stake
+    fn total_nodes(&self) -> usize {
+        self.hotshot.config.known_nodes.len()
     }
 
     fn builder_timeout(&self) -> Duration {
@@ -982,54 +972,45 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusApi<TY
 #[derive(Clone)]
 /// initializer struct for creating starting block
 pub struct HotShotInitializer<TYPES: NodeType> {
+    /// the leaf specified initialization
+    inner: Leaf2<TYPES>,
+
     /// Instance-level state.
-    pub instance_state: TYPES::InstanceState,
+    instance_state: TYPES::InstanceState,
 
-    /// Epoch height
-    pub epoch_height: u64,
+    /// Optional validated state.
+    ///
+    /// If it's given, we'll use it to construct the `SystemContext`. Otherwise, we'll construct
+    /// the state from the block header.
+    validated_state: Option<Arc<TYPES::ValidatedState>>,
 
-    /// the anchor leaf for the hotshot initializer
-    pub anchor_leaf: Leaf2<TYPES>,
-
-    /// ValidatedState for the anchor leaf
-    pub anchor_state: Arc<TYPES::ValidatedState>,
-
-    /// ValidatedState::Delta for the anchor leaf, optional.
-    pub anchor_state_delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+    /// Optional state delta.
+    ///
+    /// If it's given, we'll use it to construct the `SystemContext`.
+    state_delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 
     /// Starting view number that should be equivalent to the view the node shut down with last.
-    pub start_view: TYPES::View,
-
-    /// The view we last performed an action in.  An action is proposing or voting for
-    /// either the quorum or DA.
-    pub last_actioned_view: TYPES::View,
-
+    start_view: TYPES::View,
     /// Starting epoch number that should be equivalent to the epoch the node shut down with last.
-    pub start_epoch: Option<TYPES::Epoch>,
-
+    start_epoch: TYPES::Epoch,
+    /// The view we last performed an action in.  An action is Proposing or voting for
+    /// Either the quorum or DA.
+    actioned_view: TYPES::View,
     /// Highest QC that was seen, for genesis it's the genesis QC.  It should be for a view greater
     /// than `inner`s view number for the non genesis case because we must have seen higher QCs
     /// to decide on the leaf.
-    pub high_qc: QuorumCertificate2<TYPES>,
-
+    high_qc: QuorumCertificate2<TYPES>,
     /// Next epoch highest QC that was seen. This is needed to propose during epoch transition after restart.
-    pub next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
-
-    /// Proposals we have sent out to provide to others for catchup
-    pub saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
-
+    next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
     /// Previously decided upgrade certificate; this is necessary if an upgrade has happened and we are not restarting with the new version
-    pub decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-
+    decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
     /// Undecided leaves that were seen, but not yet decided on.  These allow a restarting node
     /// to vote and propose right away if they didn't miss anything while down.
-    pub undecided_leaves: BTreeMap<TYPES::View, Leaf2<TYPES>>,
-
+    undecided_leaves: Vec<Leaf2<TYPES>>,
     /// Not yet decided state
-    pub undecided_state: BTreeMap<TYPES::View, View<TYPES>>,
-
-    /// Saved VID shares
-    pub saved_vid_shares: VidShares<TYPES>,
+    undecided_state: BTreeMap<TYPES::View, View<TYPES>>,
+    /// Proposals we have sent out to provide to others for catchup
+    saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
 }
 
 impl<TYPES: NodeType> HotShotInitializer<TYPES> {
@@ -1038,111 +1019,63 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
     /// If we are unable to apply the genesis block to the default state
     pub async fn from_genesis<V: Versions>(
         instance_state: TYPES::InstanceState,
-        epoch_height: u64,
     ) -> Result<Self, HotShotError<TYPES>> {
         let (validated_state, state_delta) = TYPES::ValidatedState::genesis(&instance_state);
         let high_qc = QuorumCertificate2::genesis::<V>(&validated_state, &instance_state).await;
 
         Ok(Self {
-            anchor_leaf: Leaf2::genesis::<V>(&validated_state, &instance_state).await,
-            anchor_state: Arc::new(validated_state),
-            anchor_state_delta: Some(Arc::new(state_delta)),
+            inner: Leaf2::genesis(&validated_state, &instance_state).await,
+            validated_state: Some(Arc::new(validated_state)),
+            state_delta: Some(Arc::new(state_delta)),
             start_view: TYPES::View::new(0),
-            start_epoch: genesis_epoch_from_version::<V, TYPES>(),
-            last_actioned_view: TYPES::View::new(0),
+            start_epoch: TYPES::Epoch::new(0),
+            actioned_view: TYPES::View::new(0),
             saved_proposals: BTreeMap::new(),
             high_qc,
             next_epoch_high_qc: None,
             decided_upgrade_certificate: None,
-            undecided_leaves: BTreeMap::new(),
+            undecided_leaves: Vec::new(),
             undecided_state: BTreeMap::new(),
             instance_state,
-            saved_vid_shares: BTreeMap::new(),
-            epoch_height,
         })
     }
 
-    /// Use saved proposals to update undecided leaves and state
-    #[must_use]
-    pub fn update_undecided(self) -> Self {
-        let mut undecided_leaves = self.undecided_leaves.clone();
-        let mut undecided_state = self.undecided_state.clone();
-
-        for proposal in self.saved_proposals.values() {
-            // skip proposals unless they're newer than the anchor leaf
-            if proposal.data.view_number() <= self.anchor_leaf.view_number() {
-                continue;
-            }
-
-            undecided_leaves.insert(
-                proposal.data.view_number(),
-                Leaf2::from_quorum_proposal(&proposal.data),
-            );
-        }
-
-        for leaf in undecided_leaves.values() {
-            let view_inner = ViewInner::Leaf {
-                leaf: leaf.commit(),
-                state: Arc::new(TYPES::ValidatedState::from_header(leaf.block_header())),
-                delta: None,
-                epoch: leaf.epoch(self.epoch_height),
-            };
-            let view = View { view_inner };
-
-            undecided_state.insert(leaf.view_number(), view);
-        }
-
-        Self {
-            undecided_leaves,
-            undecided_state,
-            ..self
-        }
-    }
-
-    /// Create a `HotShotInitializer` from the given information.
+    /// Reload previous state based on most recent leaf and the instance-level state.
     ///
-    /// This function uses the anchor leaf to set the initial validated state,
-    /// and populates `undecided_leaves` and `undecided_state` using `saved_proposals`.
-    ///
-    /// If you are able to or would prefer to set these yourself,
-    /// you should use the `HotShotInitializer` constructor directly.
+    /// # Arguments
+    /// *  `start_view` - The minimum view number that we are confident won't lead to a double vote
+    ///     after restart.
+    /// * `validated_state` - Optional validated state that if given, will be used to construct the
+    ///     `SystemContext`.
     #[allow(clippy::too_many_arguments)]
-    pub fn load(
-        instance_state: TYPES::InstanceState,
-        epoch_height: u64,
+    pub fn from_reload(
         anchor_leaf: Leaf2<TYPES>,
-        (start_view, start_epoch): (TYPES::View, Option<TYPES::Epoch>),
-        (high_qc, next_epoch_high_qc): (
-            QuorumCertificate2<TYPES>,
-            Option<NextEpochQuorumCertificate2<TYPES>>,
-        ),
-        saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
-        saved_vid_shares: VidShares<TYPES>,
+        instance_state: TYPES::InstanceState,
+        validated_state: Option<Arc<TYPES::ValidatedState>>,
+        start_view: TYPES::View,
+        start_epoch: TYPES::Epoch,
+        actioned_view: TYPES::View,
+        saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
+        high_qc: QuorumCertificate2<TYPES>,
+        next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+        undecided_leaves: Vec<Leaf2<TYPES>>,
+        undecided_state: BTreeMap<TYPES::View, View<TYPES>>,
     ) -> Self {
-        let anchor_state = Arc::new(TYPES::ValidatedState::from_header(
-            anchor_leaf.block_header(),
-        ));
-        let anchor_state_delta = None;
-
-        let initializer = Self {
+        Self {
+            inner: anchor_leaf,
             instance_state,
-            epoch_height,
-            anchor_leaf,
-            anchor_state,
-            anchor_state_delta,
-            high_qc,
+            validated_state,
+            state_delta: None,
             start_view,
             start_epoch,
-            last_actioned_view: start_view,
+            actioned_view,
             saved_proposals,
-            saved_vid_shares,
+            high_qc,
             next_epoch_high_qc,
             decided_upgrade_certificate,
-            undecided_leaves: BTreeMap::new(),
-            undecided_state: BTreeMap::new(),
-        };
-
-        initializer.update_undecided()
+            undecided_leaves,
+            undecided_state,
+        }
     }
 }

@@ -7,8 +7,9 @@
 //! Networking Implementation that has a primary and a fallback network.  If the primary
 //! Errors we will use the backup to send or receive
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     future::Future,
+    hash::{Hash, Hasher},
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -46,6 +47,13 @@ use tracing::{debug, info, warn};
 use super::{push_cdn_network::PushCdnNetwork, NetworkError};
 use crate::traits::implementations::Libp2pNetwork;
 
+/// Helper function to calculate a hash of a type that implements Hash
+pub fn calculate_hash_of<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
+}
+
 /// Thread-safe ref counted lock to a map of channels to the delayed tasks
 type DelayedTasksChannelsMap = Arc<RwLock<BTreeMap<u64, (Sender<()>, InactiveReceiver<()>)>>>;
 
@@ -57,7 +65,7 @@ pub struct CombinedNetworks<TYPES: NodeType> {
     networks: Arc<UnderlyingCombinedNetworks<TYPES>>,
 
     /// Last n seen messages to prevent processing duplicates
-    message_cache: Arc<PlRwLock<LruCache<blake3::Hash, ()>>>,
+    message_cache: Arc<PlRwLock<LruCache<u64, ()>>>,
 
     /// How many times primary failed to deliver
     primary_fail_counter: Arc<AtomicU64>,
@@ -247,8 +255,6 @@ pub struct UnderlyingCombinedNetworks<TYPES: NodeType>(
 impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetworks<TYPES> {
     fn generator(
         expected_node_count: usize,
-        num_bootstrap: usize,
-        network_id: usize,
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
@@ -256,16 +262,12 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
         let generators = (
             <PushCdnNetwork<TYPES::SignatureKey> as TestableNetworkingImplementation<TYPES>>::generator(
                 expected_node_count,
-                num_bootstrap,
-                network_id,
                 da_committee_size,
                 None,
                 Duration::default(),
             ),
             <Libp2pNetwork<TYPES> as TestableNetworkingImplementation<TYPES>>::generator(
                 expected_node_count,
-                num_bootstrap,
-                network_id,
                 da_committee_size,
                 reliability_config,
                 Duration::default(),
@@ -449,7 +451,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             };
 
             // Calculate hash of the message
-            let message_hash = blake3::hash(&message);
+            let message_hash = calculate_hash_of(&message);
 
             // Check if the hash is in the cache and update the cache
             if self.message_cache.write().put(message_hash, ()).is_none() {
@@ -470,7 +472,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
     async fn update_view<'a, T>(
         &'a self,
         view: u64,
-        epoch: Option<u64>,
+        epoch: u64,
         membership: Arc<RwLock<T::Membership>>,
     ) where
         T: NodeType<SignatureKey = TYPES::SignatureKey> + 'a,

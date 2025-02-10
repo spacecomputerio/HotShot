@@ -18,10 +18,10 @@ use hotshot_types::{
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
     traits::{
-        node_implementation::{NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::option_epoch_from_block_number,
+    utils::epoch_from_block_number,
     vote::HasViewNumber,
 };
 use tokio::task::JoinHandle;
@@ -75,7 +75,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub cur_view_time: i64,
 
     /// The epoch number that this node is currently executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: TYPES::Epoch,
 
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
@@ -89,9 +89,6 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     /// A reference to the metrics trait.
     pub consensus: OuterConsensus<TYPES>,
 
-    /// The node's id
-    pub id: u64,
-
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 
@@ -101,7 +98,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskState<TYPES, I, V> {
     /// Handles a consensus event received on the event stream
-    #[instrument(skip_all, fields(id = self.id, cur_view = *self.cur_view, cur_epoch = self.cur_epoch.map(|x| *x)), name = "Consensus replica task", level = "error", target = "ConsensusTaskState")]
+    #[instrument(skip_all, fields(cur_view = *self.cur_view, cur_epoch = *self.cur_epoch), name = "Consensus replica task", level = "error", target = "ConsensusTaskState")]
     pub async fn handle(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -135,11 +132,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 }
             }
             HotShotEvent::Qc2Formed(Either::Left(quorum_cert)) => {
-                let cert_view = quorum_cert.view_number();
-                if !self.upgrade_lock.epochs_enabled(cert_view).await {
-                    tracing::debug!("QC2 formed but epochs not enabled. Do nothing");
-                    return Ok(());
-                }
                 if !self
                     .consensus
                     .read()
@@ -149,6 +141,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("We formed QC but not eQC. Do nothing");
                     return Ok(());
                 }
+                let cert_view = quorum_cert.view_number();
                 let cert_block_number = self
                     .consensus
                     .read()
@@ -159,17 +152,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                         "Could not find the leaf for the eQC. It shouldn't happen."
                     ))?
                     .height();
-
-                let cert_epoch = option_epoch_from_block_number::<TYPES>(
-                    true,
+                let cert_epoch = TYPES::Epoch::new(epoch_from_block_number(
                     cert_block_number,
                     self.epoch_height,
-                );
+                ));
                 // Transition to the new epoch by sending ViewChange
-                let next_epoch = cert_epoch.map(|x| x + 1);
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
+                tracing::info!("Entering new epoch: {:?}", cert_epoch + 1);
                 broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(cert_view + 1, next_epoch)),
+                    Arc::new(HotShotEvent::ViewChange(cert_view + 1, cert_epoch + 1)),
                     &sender,
                 )
                 .await;

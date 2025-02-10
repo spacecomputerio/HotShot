@@ -39,14 +39,16 @@ async fn test_catchup() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default();
     let catchup_node = vec![ChangeNode {
         idx: 19,
         updown: NodeAction::Up,
     }];
 
-    metadata.test_config.epoch_height = 0;
+    metadata.epoch_height = 0;
     metadata.timing_data = timing_data;
+    metadata.start_nodes = 19;
+    metadata.num_nodes_with_stake = 20;
 
     metadata.view_sync_properties =
         hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
@@ -70,7 +72,7 @@ async fn test_catchup() {
     };
 
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -97,13 +99,15 @@ async fn test_catchup_cdn() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, PushCdnImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default();
     let catchup_nodes = vec![ChangeNode {
         idx: 18,
         updown: NodeAction::Up,
     }];
-    metadata.test_config.epoch_height = 0;
+    metadata.epoch_height = 0;
     metadata.timing_data = timing_data;
+    metadata.start_nodes = 19;
+    metadata.num_nodes_with_stake = 20;
 
     metadata.spinning_properties = SpinningTaskDescription {
         // Start the nodes before their leadership.
@@ -122,7 +126,7 @@ async fn test_catchup_cdn() {
     };
 
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -149,13 +153,15 @@ async fn test_catchup_one_node() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default();
     let catchup_nodes = vec![ChangeNode {
         idx: 18,
         updown: NodeAction::Up,
     }];
-    metadata.test_config.epoch_height = 0;
+    metadata.epoch_height = 0;
     metadata.timing_data = timing_data;
+    metadata.start_nodes = 19;
+    metadata.num_nodes_with_stake = 20;
 
     metadata.spinning_properties = SpinningTaskDescription {
         // Start the nodes before their leadership.
@@ -176,7 +182,7 @@ async fn test_catchup_one_node() {
     };
 
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -203,7 +209,7 @@ async fn test_catchup_in_view_sync() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default();
     let catchup_nodes = vec![
         ChangeNode {
             idx: 18,
@@ -215,8 +221,10 @@ async fn test_catchup_in_view_sync() {
         },
     ];
 
-    metadata.test_config.epoch_height = 0;
+    metadata.epoch_height = 0;
     metadata.timing_data = timing_data;
+    metadata.start_nodes = 18;
+    metadata.num_nodes_with_stake = 20;
     metadata.view_sync_properties =
         hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
 
@@ -236,7 +244,7 @@ async fn test_catchup_in_view_sync() {
     };
 
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -265,15 +273,17 @@ async fn test_catchup_reload() {
         ..Default::default()
     };
     let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+        TestDescription::default();
     let catchup_node = vec![ChangeNode {
         idx: 19,
         updown: NodeAction::Up,
     }];
 
-    metadata.test_config.epoch_height = 0;
+    metadata.epoch_height = 0;
     metadata.timing_data = timing_data;
+    metadata.start_nodes = 19;
     metadata.skip_late = true;
+    metadata.num_nodes_with_stake = 20;
 
     metadata.view_sync_properties =
         hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
@@ -296,7 +306,7 @@ async fn test_catchup_reload() {
     };
 
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -313,7 +323,7 @@ cross_tests!(
           next_view_timeout: 2000,
           ..Default::default()
       };
-      let mut metadata = TestDescription::default().set_num_nodes(20,7);
+      let mut metadata = TestDescription::default();
       let mut catchup_nodes = vec![];
 
       for i in 0..20 {
@@ -324,7 +334,9 @@ cross_tests!(
       }
 
       metadata.timing_data = timing_data;
-      metadata.test_config.epoch_height = 0;
+      metadata.epoch_height = 0;
+      metadata.start_nodes = 20;
+      metadata.num_nodes_with_stake = 20;
 
       metadata.spinning_properties = SpinningTaskDescription {
           // Restart all the nodes in view 13
@@ -366,7 +378,7 @@ cross_tests!(
           ..Default::default()
       };
       let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> =
-          TestDescription::default().set_num_nodes(20,1);
+          TestDescription::default();
 
       let mut catchup_nodes = vec![];
       for i in 0..20 {
@@ -377,7 +389,12 @@ cross_tests!(
       }
 
       metadata.timing_data = timing_data;
-      metadata.test_config.epoch_height = 0;
+      metadata.start_nodes = 20;
+      metadata.num_nodes_with_stake = 20;
+      metadata.epoch_height = 0;
+
+      // Explicitly make the DA tiny to exaggerate a missing proposal.
+      metadata.da_staked_committee_size = 1;
 
       metadata.spinning_properties = SpinningTaskDescription {
           // Restart all the nodes in view 13
@@ -411,7 +428,7 @@ cross_tests!(
     Versions: [TestVersions],
     Ignore: false,
     Metadata: {
-      let mut metadata = TestDescription::default().set_num_nodes(10,4);
+      let mut metadata = TestDescription::default();
 
       let mut down_da_nodes = vec![];
       for i in 1..4 {
@@ -434,8 +451,12 @@ cross_tests!(
           updown: NodeAction::RestartDown(0),
       });
 
-      metadata.test_config.epoch_height = 0;
+      metadata.start_nodes = 10;
+      metadata.num_nodes_with_stake = 10;
+      metadata.epoch_height = 0;
 
+      // Explicitly make the DA small to simulate real network.
+      metadata.da_staked_committee_size = 4;
 
       metadata.spinning_properties = SpinningTaskDescription {
           // Restart all the nodes in view 13

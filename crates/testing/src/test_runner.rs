@@ -37,7 +37,6 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
-    utils::genesis_epoch_from_version,
     HotShotConfig, ValidatorConfig,
 };
 use tide_disco::Url;
@@ -112,11 +111,7 @@ where
         }
 
         self.add_nodes::<B>(
-            self.launcher
-                .metadata
-                .test_config
-                .num_nodes_with_stake
-                .into(),
+            self.launcher.metadata.num_nodes_with_stake,
             &late_start_nodes,
             &restart_nodes,
         )
@@ -180,12 +175,11 @@ where
         }
 
         let spinning_task_state = SpinningTask {
-            epoch_height: launcher.metadata.test_config.epoch_height,
             handles: Arc::clone(&handles),
             late_start,
             latest_view: None,
             changes,
-            last_decided_leaf: Leaf2::genesis::<V>(
+            last_decided_leaf: Leaf2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
             )
@@ -198,7 +192,7 @@ where
             next_epoch_high_qc: None,
             async_delay_config: launcher.metadata.async_delay_config,
             restart_contexts: HashMap::new(),
-            channel_generator: launcher.resource_generators.channel_generator,
+            channel_generator: launcher.resource_generator.channel_generator,
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I, V>>::new(
             spinning_task_state,
@@ -208,7 +202,7 @@ where
         // add safety task
         let overall_safety_task_state = OverallSafetyTask {
             handles: Arc::clone(&handles),
-            epoch_height: launcher.metadata.test_config.epoch_height,
+            epoch_height: launcher.metadata.epoch_height,
             ctx: RoundCtx::default(),
             properties: launcher.metadata.overall_safety_properties.clone(),
             error: None,
@@ -333,7 +327,7 @@ where
         &self,
         num_nodes: usize,
     ) -> (Vec<Box<dyn BuilderTask<TYPES>>>, Vec<Url>, Url) {
-        let config = self.launcher.metadata.test_config.clone();
+        let config = self.launcher.resource_generator.config.clone();
         let mut builder_tasks = Vec::new();
         let mut builder_urls = Vec::new();
         for metadata in &self.launcher.metadata.builders {
@@ -356,7 +350,7 @@ where
             Url::parse(&format!("http://localhost:{fallback_builder_port}")).expect("Invalid URL");
 
         let fallback_builder_task = B::start(
-            config.num_nodes_with_stake.into(),
+            config.known_nodes.len(),
             fallback_builder_url.clone(),
             B::Config::default(),
             self.launcher.metadata.fallback_builder.changes.clone(),
@@ -404,15 +398,14 @@ where
         restart: &HashSet<u64>,
     ) -> Vec<u64> {
         let mut results = vec![];
-        let config = self.launcher.metadata.test_config.clone();
+        let config = self.launcher.resource_generator.config.clone();
 
         // TODO This is only a workaround. Number of nodes changes from epoch to epoch. Builder should be made epoch-aware.
         let temp_memberships = <TYPES as NodeType>::Membership::new(
-            config.known_nodes_with_stake.clone(),
+            config.known_nodes.clone(),
             config.known_da_nodes.clone(),
         );
-        // #3967 is it enough to check versions now? Or should we also be checking epoch_height?
-        let num_nodes = temp_memberships.total_nodes(genesis_epoch_from_version::<V, TYPES>());
+        let num_nodes = temp_memberships.total_nodes(TYPES::Epoch::new(0));
         let (mut builder_tasks, builder_urls, fallback_builder_url) =
             self.init_builders::<B>(num_nodes).await;
 
@@ -433,20 +426,12 @@ where
             self.next_node_id += 1;
             tracing::debug!("launch node {}", i);
 
-            //let memberships =Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
-            //config.known_nodes_with_stake.clone(),
-            //config.known_da_nodes.clone(),
-            //)));
+            config.builder_urls = builder_urls.clone();
 
-            config.builder_urls = builder_urls
-                .clone()
-                .try_into()
-                .expect("Non-empty by construction");
-
-            let network = (self.launcher.resource_generators.channel_generator)(node_id).await;
-            let storage = (self.launcher.resource_generators.storage)(node_id);
+            let network = (self.launcher.resource_generator.channel_generator)(node_id).await;
+            let storage = (self.launcher.resource_generator.storage)(node_id);
             let mut marketplace_config =
-                (self.launcher.resource_generators.marketplace_config)(node_id);
+                (self.launcher.resource_generator.marketplace_config)(node_id);
             if let Some(solver_server) = &self.solver_server {
                 let mut new_auction_results_provider =
                     marketplace_config.auction_results_provider.as_ref().clone();
@@ -475,7 +460,7 @@ where
                                 LateNodeContextParameters {
                                     storage,
                                     memberships: <TYPES as NodeType>::Membership::new(
-                                        config.known_nodes_with_stake.clone(),
+                                        config.known_nodes.clone(),
                                         config.known_da_nodes.clone(),
                                     ),
                                     config,
@@ -487,23 +472,21 @@ where
                 } else {
                     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
                         TestInstanceState::new(self.launcher.metadata.async_delay_config.clone()),
-                        config.epoch_height,
                     )
                     .await
                     .unwrap();
 
                     // See whether or not we should be DA
-                    let is_da = node_id < config.da_staked_committee_size as u64;
+                    let is_da = node_id < config.known_da_nodes.len() as u64;
 
                     // We assign node's public key and stake value rather than read from config file since it's a test
                     let validator_config =
                         ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, is_da);
 
                     let hotshot = Self::add_node_with_config(
-                        node_id,
                         network.clone(),
                         <TYPES as NodeType>::Membership::new(
-                            config.known_nodes_with_stake.clone(),
+                            config.known_nodes.clone(),
                             config.known_da_nodes.clone(),
                         ),
                         initializer,
@@ -526,7 +509,7 @@ where
                     node_id,
                     network,
                     <TYPES as NodeType>::Membership::new(
-                        config.known_nodes_with_stake.clone(),
+                        config.known_nodes.clone(),
                         config.known_da_nodes.clone(),
                     ),
                     config,
@@ -570,7 +553,7 @@ where
             )
             .await;
 
-            match node_id.cmp(&(config.da_staked_committee_size as u64 - 1)) {
+            match node_id.cmp(&(config.known_da_nodes.len() as u64 - 1)) {
                 std::cmp::Ordering::Less => {
                     if let Some(task) = builder_tasks.pop() {
                         task.start(Box::new(handle.event_stream()))
@@ -600,7 +583,6 @@ where
     /// if unable to initialize the node's `SystemContext` based on the config
     #[allow(clippy::too_many_arguments)]
     pub async fn add_node_with_config(
-        node_id: u64,
         network: Network<TYPES, I>,
         memberships: TYPES::Membership,
         initializer: HotShotInitializer<TYPES>,
@@ -616,7 +598,6 @@ where
         SystemContext::new(
             public_key,
             private_key,
-            node_id,
             config,
             Arc::new(RwLock::new(memberships)),
             network,
@@ -633,7 +614,6 @@ where
     /// if unable to initialize the node's `SystemContext` based on the config
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub async fn add_node_with_config_and_channels(
-        node_id: u64,
         network: Network<TYPES, I>,
         memberships: Arc<RwLock<TYPES::Membership>>,
         initializer: HotShotInitializer<TYPES>,
@@ -654,7 +634,6 @@ where
         SystemContext::new_from_channels(
             public_key,
             private_key,
-            node_id,
             config,
             memberships,
             network,
@@ -665,7 +644,6 @@ where
             internal_channel,
             external_channel,
         )
-        .await
     }
 }
 

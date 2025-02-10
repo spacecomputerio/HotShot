@@ -26,9 +26,8 @@ use vbs::{
 
 use crate::{
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, UpgradeProposal,
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2, UpgradeProposal,
+        VidDisperseShare, VidDisperseShare2,
     },
     request_response::ProposalRequestPayload,
     simple_certificate::{
@@ -37,7 +36,7 @@ use crate::{
         ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote, DaVote2, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote,
+        DaVote, DaVote2, QuorumVote, QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote,
         ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2,
         ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
     },
@@ -48,7 +47,7 @@ use crate::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::{mnemonic, option_epoch_from_block_number},
+    utils::{epoch_from_block_number, mnemonic},
     vote::HasViewNumber,
 };
 
@@ -168,22 +167,6 @@ impl<TYPES: NodeType> ViewMessage<TYPES> for MessageKind<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> HasEpoch<TYPES> for MessageKind<TYPES> {
-    fn epoch(&self) -> Option<TYPES::Epoch> {
-        match &self {
-            MessageKind::Consensus(message) => message.epoch_number(),
-            MessageKind::Data(
-                DataMessage::SubmitTransaction(_, _) | DataMessage::RequestData(_),
-            )
-            | MessageKind::External(_) => None,
-            MessageKind::Data(DataMessage::DataResponse(msg)) => match msg {
-                ResponseMessage::Found(m) => m.epoch_number(),
-                ResponseMessage::NotFound | ResponseMessage::Denied => None,
-            },
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(bound(deserialize = "", serialize = ""))]
 /// Messages related to both validating and sequencing consensus.
@@ -221,6 +204,12 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     /// Message with an upgrade vote
     UpgradeVote(UpgradeVote<TYPES>),
 
+    /// Message with a quorum proposal.
+    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
+
+    /// Message with a quorum vote.
+    Vote2(QuorumVote2<TYPES>),
+
     /// A peer node needs a proposal from the leader.
     ProposalRequested(
         ProposalRequestPayload<TYPES>,
@@ -229,12 +218,6 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// A replica has responded with a valid proposal.
     ProposalResponse(Proposal<TYPES, QuorumProposal<TYPES>>),
-
-    /// Message with a quorum proposal.
-    Proposal2(Proposal<TYPES, QuorumProposal2<TYPES>>),
-
-    /// Message with a quorum vote.
-    Vote2(QuorumVote2<TYPES>),
 
     /// A replica has responded with a valid proposal.
     ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
@@ -280,7 +263,7 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
     /// Initiate VID dispersal.
     ///
     /// Like [`DaProposal`]. Use `Msg` suffix to distinguish from `VidDisperse`.
-    VidDisperseMsg(Proposal<TYPES, ADVZDisperseShare<TYPES>>),
+    VidDisperseMsg(Proposal<TYPES, VidDisperseShare<TYPES>>),
 
     /// Proposal for data availability committee
     DaProposal2(Proposal<TYPES, DaProposal2<TYPES>>),
@@ -380,6 +363,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     DaConsensusMessage::DaVote(vote_message) => vote_message.view_number(),
                     DaConsensusMessage::DaCertificate(cert) => cert.view_number,
                     DaConsensusMessage::VidDisperseMsg(disperse) => disperse.data.view_number(),
+                    DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.view_number(),
                     DaConsensusMessage::DaProposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
@@ -387,77 +371,6 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     }
                     DaConsensusMessage::DaVote2(vote_message) => vote_message.view_number(),
                     DaConsensusMessage::DaCertificate2(cert) => cert.view_number,
-                    DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.view_number(),
-                }
-            }
-        }
-    }
-
-    /// Get the epoch number this message relates to, if applicable
-    fn epoch_number(&self) -> Option<TYPES::Epoch> {
-        match &self {
-            SequencingMessage::General(general_message) => {
-                match general_message {
-                    GeneralConsensusMessage::Proposal(p) => {
-                        // view of leader in the leaf when proposal
-                        // this should match replica upon receipt
-                        p.data.epoch()
-                    }
-                    GeneralConsensusMessage::Proposal2(p) => {
-                        // view of leader in the leaf when proposal
-                        // this should match replica upon receipt
-                        p.data.epoch()
-                    }
-                    GeneralConsensusMessage::ProposalRequested(_, _) => None,
-                    GeneralConsensusMessage::ProposalResponse(proposal) => proposal.data.epoch(),
-                    GeneralConsensusMessage::ProposalResponse2(proposal) => proposal.data.epoch(),
-                    GeneralConsensusMessage::Vote(vote_message) => vote_message.epoch(),
-                    GeneralConsensusMessage::Vote2(vote_message) => vote_message.epoch(),
-                    GeneralConsensusMessage::TimeoutVote(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncPreCommitVote(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncCommitVote(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncFinalizeVote(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncPreCommitCertificate(message) => {
-                        message.epoch()
-                    }
-                    GeneralConsensusMessage::ViewSyncCommitCertificate(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncFinalizeCertificate(message) => {
-                        message.epoch()
-                    }
-                    GeneralConsensusMessage::TimeoutVote2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncPreCommitVote2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncCommitVote2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncFinalizeVote2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncPreCommitCertificate2(message) => {
-                        message.epoch()
-                    }
-                    GeneralConsensusMessage::ViewSyncCommitCertificate2(message) => message.epoch(),
-                    GeneralConsensusMessage::ViewSyncFinalizeCertificate2(message) => {
-                        message.epoch()
-                    }
-                    GeneralConsensusMessage::UpgradeProposal(message) => message.data.epoch(),
-                    GeneralConsensusMessage::UpgradeVote(message) => message.epoch(),
-                    GeneralConsensusMessage::HighQc(qc) => qc.epoch(),
-                }
-            }
-            SequencingMessage::Da(da_message) => {
-                match da_message {
-                    DaConsensusMessage::DaProposal(p) => {
-                        // view of leader in the leaf when proposal
-                        // this should match replica upon receipt
-                        p.data.epoch()
-                    }
-                    DaConsensusMessage::DaVote(vote_message) => vote_message.epoch(),
-                    DaConsensusMessage::DaCertificate(cert) => cert.epoch(),
-                    DaConsensusMessage::VidDisperseMsg(disperse) => disperse.data.epoch(),
-                    DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.epoch(),
-                    DaConsensusMessage::DaProposal2(p) => {
-                        // view of leader in the leaf when proposal
-                        // this should match replica upon receipt
-                        p.data.epoch()
-                    }
-                    DaConsensusMessage::DaVote2(vote_message) => vote_message.epoch(),
-                    DaConsensusMessage::DaCertificate2(cert) => cert.epoch(),
                 }
             }
         }
@@ -483,10 +396,7 @@ pub enum DataMessage<TYPES: NodeType> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(bound(deserialize = ""))]
 /// Prepare qc from the leader
-pub struct Proposal<
-    TYPES: NodeType,
-    PROPOSAL: HasViewNumber<TYPES> + HasEpoch<TYPES> + DeserializeOwned,
-> {
+pub struct Proposal<TYPES: NodeType, PROPOSAL: HasViewNumber<TYPES> + DeserializeOwned> {
     // NOTE: optimization could include view number to help look up parent leaf
     // could even do 16 bit numbers if we want
     /// The data being proposed.
@@ -503,8 +413,8 @@ pub fn convert_proposal<TYPES, PROPOSAL, PROPOSAL2>(
 ) -> Proposal<TYPES, PROPOSAL2>
 where
     TYPES: NodeType,
-    PROPOSAL: HasViewNumber<TYPES> + HasEpoch<TYPES> + DeserializeOwned,
-    PROPOSAL2: HasViewNumber<TYPES> + HasEpoch<TYPES> + DeserializeOwned + From<PROPOSAL>,
+    PROPOSAL: HasViewNumber<TYPES> + DeserializeOwned,
+    PROPOSAL2: HasViewNumber<TYPES> + DeserializeOwned + From<PROPOSAL>,
 {
     Proposal {
         data: proposal.data.into(),
@@ -523,11 +433,15 @@ where
     pub async fn validate_signature<V: Versions>(
         &self,
         membership: &TYPES::Membership,
-        _epoch_height: u64,
+        epoch_height: u64,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
         let view_number = self.data.view_number();
-        let view_leader_key = membership.leader(view_number, None)?;
+        let proposal_epoch = TYPES::Epoch::new(epoch_from_block_number(
+            self.data.block_header.block_number(),
+            epoch_height,
+        ));
+        let view_leader_key = membership.leader(view_number, proposal_epoch)?;
         let proposed_leaf = Leaf::from_quorum_proposal(&self.data);
 
         ensure!(
@@ -542,7 +456,7 @@ where
     }
 }
 
-/*impl<TYPES> Proposal<TYPES, QuorumProposal2<TYPES>>
+impl<TYPES> Proposal<TYPES, QuorumProposal2<TYPES>>
 where
     TYPES: NodeType,
 {
@@ -555,41 +469,10 @@ where
         epoch_height: u64,
     ) -> Result<()> {
         let view_number = self.data.view_number();
-        let proposal_epoch = option_epoch_from_block_number::<TYPES>(
-            true,
+        let proposal_epoch = TYPES::Epoch::new(epoch_from_block_number(
             self.data.block_header.block_number(),
             epoch_height,
-        );
-        let view_leader_key = membership.leader(view_number, proposal_epoch)?;
-        let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);
-
-        ensure!(
-            view_leader_key.validate(&self.signature, proposed_leaf.commit().as_ref()),
-            "Proposal signature is invalid."
-        );
-
-        Ok(())
-    }
-}*/
-
-impl<TYPES> Proposal<TYPES, QuorumProposalWrapper<TYPES>>
-where
-    TYPES: NodeType,
-{
-    /// Checks that the signature of the quorum proposal is valid.
-    /// # Errors
-    /// Returns an error when the proposal signature is invalid.
-    pub fn validate_signature(
-        &self,
-        membership: &TYPES::Membership,
-        epoch_height: u64,
-    ) -> Result<()> {
-        let view_number = self.data.proposal.view_number();
-        let proposal_epoch = option_epoch_from_block_number::<TYPES>(
-            self.data.proposal.epoch().is_some(),
-            self.data.block_header().block_number(),
-            epoch_height,
-        );
+        ));
         let view_leader_key = membership.leader(view_number, proposal_epoch)?;
         let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);
 
@@ -672,11 +555,6 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             }
             None => V::Base::VERSION,
         }
-    }
-
-    /// Return whether epochs are enabled in the given view
-    pub async fn epochs_enabled(&self, view: TYPES::View) -> bool {
-        self.version_infallible(view).await >= V::Epochs::VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()` and an optional decided upgrade certificate to determine the message's version.

@@ -6,7 +6,12 @@
 
 /// Task for doing bootstraps at a regular interval
 pub mod bootstrap;
-use std::{collections::HashMap, marker::PhantomData, num::NonZeroUsize, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    num::NonZeroUsize,
+    time::Duration,
+};
 
 /// a local caching layer for the DHT key value pairs
 use futures::{
@@ -22,11 +27,7 @@ use libp2p::kad::{
 use libp2p::kad::{
     store::RecordStore, Behaviour as KademliaBehaviour, BootstrapError, Event as KademliaEvent,
 };
-use libp2p_identity::PeerId;
-use store::{
-    persistent::{DhtPersistentStorage, PersistentStore},
-    validated::ValidatedStore,
-};
+use store::{file_backed::FileBackedStore, validated::ValidatedStore};
 use tokio::{spawn, sync::mpsc::UnboundedSender, time::sleep};
 use tracing::{debug, error, warn};
 
@@ -55,28 +56,31 @@ use crate::network::{ClientRequest, NetworkEvent};
 /// - bootstrapping into the network
 /// - peer discovery
 #[derive(Debug)]
-pub struct DHTBehaviour<K: SignatureKey + 'static, D: DhtPersistentStorage> {
+pub struct DHTBehaviour<K: SignatureKey + 'static> {
     /// in progress queries for nearby peers
     pub in_progress_get_closest_peers: HashMap<QueryId, Sender<()>>,
     /// List of in-progress get requests
     in_progress_record_queries: HashMap<QueryId, KadGetQuery>,
-    /// The list of in-progress get requests by key
-    outstanding_dht_query_keys: HashMap<Vec<u8>, QueryId>,
+    /// The lookup keys for all outstanding DHT queries
+    outstanding_dht_query_keys: HashSet<Vec<u8>>,
     /// List of in-progress put requests
     in_progress_put_record_queries: HashMap<QueryId, KadPutQuery>,
     /// State of bootstrapping
     pub bootstrap_state: Bootstrap,
-    /// the peer id (useful only for debugging right now)
-    pub peer_id: PeerId,
-    /// replication factor
-    pub replication_factor: NonZeroUsize,
     /// Sender to retry requests.
     retry_tx: Option<UnboundedSender<ClientRequest>>,
     /// Sender to the bootstrap task
     bootstrap_tx: Option<mpsc::Sender<bootstrap::InputEvent>>,
 
-    /// Phantom type for the key and persistent storage
-    phantom: PhantomData<(K, D)>,
+    /// Phantom type for the key
+    phantom: PhantomData<K>,
+}
+
+/// The default implementation just calls the constructor
+impl<K: SignatureKey + 'static> Default for DHTBehaviour<K> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// State of bootstrapping
@@ -104,7 +108,7 @@ pub enum DHTEvent {
     IsBootstrapped,
 }
 
-impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
+impl<K: SignatureKey + 'static> DHTBehaviour<K> {
     /// Give the handler a way to retry requests.
     pub fn set_retry(&mut self, tx: UnboundedSender<ClientRequest>) {
         self.retry_tx = Some(tx);
@@ -115,23 +119,21 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
     }
     /// Create a new DHT behaviour
     #[must_use]
-    pub fn new(pid: PeerId, replication_factor: NonZeroUsize) -> Self {
+    pub fn new() -> Self {
         // needed because otherwise we stay in client mode when testing locally
         // and don't publish keys stuff
         // e.g. dht just doesn't work. We'd need to add mdns and that doesn't seem worth it since
         // we won't have a local network
         // <https://github.com/libp2p/rust-libp2p/issues/4194>
         Self {
-            peer_id: pid,
             in_progress_record_queries: HashMap::default(),
             in_progress_put_record_queries: HashMap::default(),
-            outstanding_dht_query_keys: HashMap::default(),
+            outstanding_dht_query_keys: HashSet::default(),
             bootstrap_state: Bootstrap {
                 state: State::NotStarted,
                 backoff: ExponentialBackoff::new(2, Duration::from_secs(1)),
             },
             in_progress_get_closest_peers: HashMap::default(),
-            replication_factor,
             retry_tx: None,
             bootstrap_tx: None,
             phantom: PhantomData,
@@ -141,9 +143,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
     /// print out the routing table to stderr
     pub fn print_routing_table(
         &mut self,
-        kadem: &mut KademliaBehaviour<PersistentStore<ValidatedStore<MemoryStore, K>, D>>,
+        kadem: &mut KademliaBehaviour<FileBackedStore<ValidatedStore<MemoryStore, K>>>,
     ) {
-        let mut err = format!("KBUCKETS: PID: {:?}, ", self.peer_id);
+        let mut err = "KBUCKETS: ".to_string();
         let v = kadem.kbuckets().collect::<Vec<_>>();
         for i in v {
             for j in i.iter() {
@@ -157,11 +159,6 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
         error!("{:?}", err);
     }
 
-    /// Get the replication factor for queries
-    #[must_use]
-    pub fn replication_factor(&self) -> NonZeroUsize {
-        self.replication_factor
-    }
     /// Publish a key/value to the kv store.
     /// Once replicated upon all nodes, the caller is notified over
     /// `chan`
@@ -173,11 +170,11 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
     pub fn get_record(
         &mut self,
         key: Vec<u8>,
-        chans: Vec<Sender<Vec<u8>>>,
+        chan: Sender<Vec<u8>>,
         factor: NonZeroUsize,
         backoff: ExponentialBackoff,
         retry_count: u8,
-        kad: &mut KademliaBehaviour<PersistentStore<ValidatedStore<MemoryStore, K>, D>>,
+        kad: &mut KademliaBehaviour<FileBackedStore<ValidatedStore<MemoryStore, K>>>,
     ) {
         // noop
         if retry_count == 0 {
@@ -186,39 +183,24 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
 
         // Check the cache before making the (expensive) query
         if let Some(entry) = kad.store_mut().get(&key.clone().into()) {
-            // The key already exists in the cache, send the value to all channels
-            for chan in chans {
-                if chan.send(entry.value.clone()).is_err() {
-                    warn!("Get DHT: channel closed before get record request result could be sent");
-                }
+            // The key already exists in the cache
+            if chan.send(entry.value.clone()).is_err() {
+                error!("Get DHT: channel closed before get record request result could be sent");
             }
         } else {
             // Check if the key is already being queried
-            if let Some(qid) = self.outstanding_dht_query_keys.get(&key) {
-                // The key was already being queried. Add the channel to the existing query
-                // Try to get the query from the query id
-                let Some(query) = self.in_progress_record_queries.get_mut(qid) else {
-                    warn!("Get DHT: outstanding query not found");
-                    return;
-                };
-
-                // Add the channel to the existing query
-                query.notify.extend(chans);
-            } else {
+            if self.outstanding_dht_query_keys.insert(key.clone()) {
                 // The key was not already being queried and was not in the cache. Start a new query.
                 let qid = kad.get_record(key.clone().into());
                 let query = KadGetQuery {
                     backoff,
                     progress: DHTProgress::InProgress(qid),
-                    notify: chans,
+                    notify: chan,
                     num_replicas: factor,
-                    key: key.clone(),
+                    key,
                     retry_count: retry_count - 1,
                     records: HashMap::default(),
                 };
-
-                // Add the key to the outstanding queries and in-progress queries
-                self.outstanding_dht_query_keys.insert(key, qid);
                 self.in_progress_record_queries.insert(qid, query);
             }
         }
@@ -260,7 +242,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
     /// update state based on recv-ed get query
     fn handle_get_query(
         &mut self,
-        store: &mut PersistentStore<ValidatedStore<MemoryStore, K>, D>,
+        store: &mut FileBackedStore<ValidatedStore<MemoryStore, K>>,
         record_results: GetRecordResult,
         id: QueryId,
         mut last: bool,
@@ -318,14 +300,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 // Remove the key from the outstanding queries so we are in sync
                 self.outstanding_dht_query_keys.remove(&key);
 
-                // `notify` is all channels that are still open
-                let notify = notify
-                    .into_iter()
-                    .filter(|n| !n.is_canceled())
-                    .collect::<Vec<_>>();
-
-                // If all are closed, we can exit
-                if notify.is_empty() {
+                // if channel has been dropped, cancel request
+                if notify.is_canceled() {
                     return;
                 }
 
@@ -348,11 +324,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
 
                     // Only return the record if we can store it (validation passed)
                     if store.put(record).is_ok() {
-                        // Send the record to all channels that are still open
-                        for n in notify {
-                            if n.send(r.clone()).is_err() {
-                                warn!("Get DHT: channel closed before get record request result could be sent");
-                            }
+                        if notify.send(r).is_err() {
+                            error!("Get DHT: channel closed before get record request result could be sent");
                         }
                     } else {
                         error!("Failed to store record in local store");
@@ -403,10 +376,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     query.progress = DHTProgress::NotStarted;
                     query.backoff.start_next(false);
 
-                    warn!(
-                        "Put DHT: error performing put: {:?}. Retrying on pid {:?}.",
-                        e, self.peer_id
-                    );
+                    warn!("Put DHT: error performing put: {:?}. Retrying.", e);
                     // push back onto the queue
                     self.retry_put(query);
                 }
@@ -427,7 +397,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
     pub fn dht_handle_event(
         &mut self,
         event: KademliaEvent,
-        store: &mut PersistentStore<ValidatedStore<MemoryStore, K>, D>,
+        store: &mut FileBackedStore<ValidatedStore<MemoryStore, K>>,
     ) -> Option<NetworkEvent> {
         match event {
             KademliaEvent::OutboundQueryProgressed {
@@ -532,8 +502,8 @@ pub(crate) struct KadGetQuery {
     pub(crate) backoff: ExponentialBackoff,
     /// progress through DHT query
     pub(crate) progress: DHTProgress,
-    /// The channels to notify of the result
-    pub(crate) notify: Vec<Sender<Vec<u8>>>,
+    /// notify client of result
+    pub(crate) notify: Sender<Vec<u8>>,
     /// number of replicas required to replicate over
     pub(crate) num_replicas: NonZeroUsize,
     /// the key to look up

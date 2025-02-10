@@ -13,7 +13,7 @@ use std::{path::Path, time::Duration};
 use async_trait::async_trait;
 use bincode::config::Options;
 use cdn_broker::reexports::{
-    connection::protocols::{Quic, Tcp},
+    connection::protocols::{Tcp, TcpTls},
     def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
     discovery::{Embedded, Redis},
 };
@@ -39,17 +39,23 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, Metrics, NoMetrics},
         network::{BroadcastDelay, ConnectedNetwork, Topic as HotShotTopic},
-        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::bincode_opts,
     BoxSyncFuture,
 };
+
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::traits::node_implementation::NodeType;
+
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
+use tokio::sync::mpsc::error::TrySendError;
+#[cfg(feature = "hotshot-testing")]
+use tokio::{spawn, time::sleep};
+#[cfg(feature = "hotshot-testing")]
 use tracing::error;
 
 use super::NetworkError;
@@ -149,7 +155,7 @@ impl<K: SignatureKey + 'static> RunDef for ProductionDef<K> {
 pub struct UserDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey + 'static> ConnectionDef for UserDef<K> {
     type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Quic;
+    type Protocol = TcpTls;
     type MessageHook = NoMessageHook;
 }
 
@@ -169,7 +175,7 @@ impl<K: SignatureKey> ConnectionDef for BrokerDef<K> {
 pub struct ClientDef<K: SignatureKey + 'static>(PhantomData<K>);
 impl<K: SignatureKey> ConnectionDef for ClientDef<K> {
     type Scheme = WrappedSignatureKey<K>;
-    type Protocol = Quic;
+    type Protocol = TcpTls;
     type MessageHook = NoMessageHook;
 }
 
@@ -288,8 +294,6 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
     #[allow(clippy::too_many_lines)]
     fn generator(
         _expected_node_count: usize,
-        _num_bootstrap: usize,
-        _network_id: usize,
         da_committee_size: usize,
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
@@ -536,15 +540,15 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
     /// - If we fail to serialize the message
     /// - If we fail to send the direct message
     async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError> {
-        // If the message is to ourselves, just add it to the internal queue
-        if recipient == self.public_key {
-            self.internal_queue.lock().push_back(message);
-            return Ok(());
-        }
-
         // If we're paused, don't send the message
         #[cfg(feature = "hotshot-testing")]
         if self.is_paused.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        // If the message is to ourselves, just add it to the internal queue
+        if recipient == self.public_key {
+            self.internal_queue.lock().push_back(message);
             return Ok(());
         }
 

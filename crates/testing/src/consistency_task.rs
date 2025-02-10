@@ -197,13 +197,6 @@ fn sanitize_view_map<TYPES: NodeType>(
         }
     }
 
-    for (parent, child) in result.values().zip(result.values().skip(1)) {
-        // We want to make sure the aggregated leafmap has not missed a decide event
-        if child.justify_qc().data.leaf_commit != parent.commit() {
-            bail!("The network has decided:\n\n{child:?}\n\nwhich succeeds:\n\n{parent:?}\n\nbut the commits do not match. Did we miss an intermediate leaf?");
-        }
-    }
-
     Ok(result)
 }
 

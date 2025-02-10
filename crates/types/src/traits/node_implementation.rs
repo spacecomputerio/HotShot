@@ -35,12 +35,10 @@ use super::{
     ValidatedState,
 };
 use crate::{
-    constants::DEFAULT_UPGRADE_CONSTANTS,
     data::{Leaf2, TestableLeaf},
     traits::{
         election::Membership, signature_key::SignatureKey, states::InstanceState, BlockPayload,
     },
-    upgrade_config::UpgradeConstants,
 };
 
 /// This trait guarantees that a particular type has urls that can be extracted from it. This trait
@@ -103,7 +101,6 @@ pub trait TestableNodeImplementation<TYPES: NodeType>: NodeImplementation<TYPES>
     /// Generate the communication channels for testing
     fn gen_networks(
         expected_node_count: usize,
-        num_bootstrap: usize,
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
@@ -145,15 +142,12 @@ where
 
     fn gen_networks(
         expected_node_count: usize,
-        num_bootstrap: usize,
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
     ) -> AsyncGenerator<Arc<Self::Network>> {
         <I::Network as TestableNetworkingImplementation<TYPES>>::generator(
             expected_node_count,
-            num_bootstrap,
-            0,
             da_committee_size,
             reliability_config.clone(),
             secondary_network_delay,
@@ -185,10 +179,8 @@ pub trait ConsensusTime:
     fn genesis() -> Self {
         Self::new(0)
     }
-
     /// Create a new instance of this time unit
     fn new(val: u64) -> Self;
-
     /// Get the u64 format of time
     fn u64(&self) -> u64;
 }
@@ -210,8 +202,6 @@ pub trait NodeType:
     + Sync
     + 'static
 {
-    /// Constants used to construct upgrade proposals
-    const UPGRADE_CONSTANTS: UpgradeConstants = DEFAULT_UPGRADE_CONSTANTS;
     /// The time type that this hotshot setup is using.
     ///
     /// This should be the same `Time` that `ValidatedState::Time` is using.

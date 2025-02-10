@@ -43,7 +43,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub latest_proposed_view: TYPES::View,
 
     /// Current epoch
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: TYPES::Epoch,
 
     /// Table for the in-progress proposal dependency tasks.
     pub proposal_dependencies: BTreeMap<TYPES::View, JoinHandle<()>>,
@@ -69,9 +69,6 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     /// Shared consensus task state
     pub consensus: OuterConsensus<TYPES>,
 
-    /// The node's id
-    pub id: u64,
-
     /// The most recent upgrade certificate this node formed.
     /// Note: this is ONLY for certificates that have been formed internally,
     /// so that we can propose with them.
@@ -94,14 +91,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     QuorumProposalTaskState<TYPES, I, V>
 {
     /// Create an event dependency
-    #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Create event dependency", level = "info")]
+    #[instrument(skip_all, fields(latest_proposed_view = *self.latest_proposed_view), name = "Create event dependency", level = "info")]
     fn create_event_dependency(
         &self,
         dependency_type: ProposalDependency,
         view_number: TYPES::View,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> EventDependency<Arc<HotShotEvent<TYPES>>> {
-        let id = self.id;
         EventDependency::new(
             event_receiver,
             Box::new(move |event| {
@@ -153,8 +149,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         }
                     }
                     ProposalDependency::VidShare => {
-                        if let HotShotEvent::VidDisperseSend(vid_disperse, _) = event {
-                            vid_disperse.data.view_number()
+                        if let HotShotEvent::VidDisperseSend(vid_share, _) = event {
+                            vid_share.data.view_number()
                         } else {
                             return false;
                         }
@@ -163,7 +159,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let valid = event_view == view_number;
                 if valid {
                     tracing::debug!(
-                        "Dependency {dependency_type:?} is complete for view {event_view:?}, my id is {id:?}!",
+                        "Dependency {dependency_type:?} is complete for view {event_view:?}",
                     );
                 }
                 valid
@@ -270,11 +266,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     /// dependency as already completed. This allows for the task to receive a proposable event
     /// without losing the data that it received, as the dependency task would otherwise have no
     /// ability to receive the event and, thus, would never propose.
-    #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Create dependency task", level = "error")]
+    #[instrument(skip_all, fields(latest_proposed_view = *self.latest_proposed_view), name = "Create dependency task", level = "error")]
     async fn create_dependency_task_if_new(
         &mut self,
         view_number: TYPES::View,
-        epoch_number: Option<TYPES::Epoch>,
+        epoch_number: TYPES::Epoch,
         event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
         event: Arc<HotShotEvent<TYPES>>,
@@ -285,14 +281,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             membership_reader.leader(view_number, epoch_number)? == self.public_key;
         // If we are in the epoch transition and we are the leader in the next epoch,
         // we might want to start collecting dependencies for our next epoch proposal.
-
-        let leader_in_next_epoch = epoch_number.is_some()
-            && matches!(
-                epoch_transition_indicator,
-                EpochTransitionIndicator::InTransition
-            )
-            && membership_reader.leader(view_number, epoch_number.map(|x| x + 1))?
-                == self.public_key;
+        let leader_in_next_epoch = matches!(
+            epoch_transition_indicator,
+            EpochTransitionIndicator::InTransition
+        ) && membership_reader.leader(view_number, epoch_number + 1)?
+            == self.public_key;
         drop(membership_reader);
 
         // Don't even bother making the task if we are not entitled to propose anyway.
@@ -334,7 +327,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 timeout: self.timeout,
                 formed_upgrade_certificate: self.formed_upgrade_certificate.clone(),
                 upgrade_lock: self.upgrade_lock.clone(),
-                id: self.id,
                 view_start_time: Instant::now(),
                 highest_qc: self.highest_qc.clone(),
                 epoch_height: self.epoch_height,
@@ -347,7 +339,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     }
 
     /// Update the latest proposed view number.
-    #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Update latest proposed view", level = "error")]
+    #[instrument(skip_all, fields(latest_proposed_view = *self.latest_proposed_view), name = "Update latest proposed view", level = "error")]
     async fn update_latest_proposed_view(&mut self, new_view: TYPES::View) -> bool {
         if *self.latest_proposed_view < *new_view {
             tracing::debug!(
@@ -372,7 +364,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     }
 
     /// Handles a consensus event received on the event stream
-    #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view, epoch = self.cur_epoch.map(|x| *x)), name = "handle method", level = "error", target = "QuorumProposalTaskState")]
+    #[instrument(skip_all, fields(latest_proposed_view = *self.latest_proposed_view, epoch = *self.cur_epoch), name = "handle method", level = "error", target = "QuorumProposalTaskState")]
     pub async fn handle(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -477,20 +469,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     membership_reader.success_threshold(epoch_number);
                 drop(membership_reader);
 
-                certificate
-                    .is_valid_cert(
-                        membership_stake_table,
-                        membership_success_threshold,
-                        &self.upgrade_lock,
-                    )
-                    .await
-                    .context(|e| {
-                        warn!(
-                            "View Sync Finalize certificate {:?} was invalid: {}",
-                            certificate.data(),
-                            e
+                ensure!(
+                    certificate
+                        .is_valid_cert(
+                            membership_stake_table,
+                            membership_success_threshold,
+                            &self.upgrade_lock
                         )
-                    })?;
+                        .await,
+                    warn!(
+                        "View Sync Finalize certificate {:?} was invalid",
+                        certificate.data()
+                    )
+                );
 
                 let view_number = certificate.view_number;
 
@@ -529,8 +520,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     "Failed to update latest proposed view"
                 );
             }
-            HotShotEvent::VidDisperseSend(vid_disperse, _) => {
-                let view_number = vid_disperse.data.view_number();
+            HotShotEvent::VidDisperseSend(vid_share, _) => {
+                let view_number = vid_share.data.view_number();
                 self.create_dependency_task_if_new(
                     view_number,
                     epoch_number,
@@ -562,14 +553,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     membership_reader.success_threshold(cert_epoch_number);
                 drop(membership_reader);
 
-                qc.is_valid_cert(
-                    membership_stake_table,
-                    membership_success_threshold,
-                    &self.upgrade_lock,
-                )
-                .await
-                .context(|e| warn!("Quorum certificate {:?} was invalid: {}", qc.data(), e))?;
-
+                ensure!(
+                    qc.is_valid_cert(
+                        membership_stake_table,
+                        membership_success_threshold,
+                        &self.upgrade_lock
+                    )
+                    .await,
+                    warn!("Quorum certificate {:?} was invalid", qc.data())
+                );
                 self.highest_qc = qc.clone();
             }
             HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) => {

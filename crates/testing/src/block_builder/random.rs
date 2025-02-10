@@ -25,13 +25,10 @@ use hotshot_builder_api::v0_1::{
     builder::BuildError,
     data_source::BuilderDataSource,
 };
-use hotshot_example_types::{block_types::TestTransaction, node_types::TestVersions};
+use hotshot_example_types::block_types::TestTransaction;
 use hotshot_types::{
-    network::RandomBuilderConfig,
-    traits::{
-        node_implementation::{NodeType, Versions},
-        signature_key::BuilderSignatureKey,
-    },
+    builder::RandomBuilderConfig,
+    traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey},
     utils::BuilderCommitment,
     vid::VidCommitment,
 };
@@ -39,7 +36,6 @@ use lru::LruCache;
 use rand::{rngs::SmallRng, Rng, RngCore, SeedableRng};
 use tide_disco::{method::ReadState, Url};
 use tokio::{spawn, time::sleep};
-use vbs::version::StaticVersionType;
 
 use super::{
     build_block, run_builder_source_0_1, BlockEntry, BuilderTask, TestBuilderImplementation,
@@ -114,7 +110,7 @@ pub struct RandomBuilderTask<TYPES: NodeType<Transaction = TestTransaction>> {
 }
 
 impl<TYPES: NodeType<Transaction = TestTransaction>> RandomBuilderTask<TYPES> {
-    async fn build_blocks<V: Versions>(
+    async fn build_blocks(
         options: RandomBuilderConfig,
         num_nodes: Arc<RwLock<usize>>,
         pub_key: <TYPES as NodeType>::BuilderSignatureKey,
@@ -140,14 +136,11 @@ impl<TYPES: NodeType<Transaction = TestTransaction>> RandomBuilderTask<TYPES> {
                 })
                 .collect();
 
-            // Let new VID scheme ship with Epochs upgrade.
-            let version = <V as Versions>::Epochs::VERSION;
-            let block = build_block::<TYPES, V>(
+            let block = build_block(
                 transactions,
                 num_nodes.clone(),
                 pub_key.clone(),
                 priv_key.clone(),
-                version,
             )
             .await;
 
@@ -178,7 +171,7 @@ where
         mut self: Box<Self>,
         mut stream: Box<dyn Stream<Item = Event<TYPES>> + std::marker::Unpin + Send + 'static>,
     ) {
-        let mut task = Some(spawn(Self::build_blocks::<TestVersions>(
+        let mut task = Some(spawn(Self::build_blocks(
             self.config.clone(),
             self.num_nodes.clone(),
             self.pub_key.clone(),
@@ -198,7 +191,7 @@ where
                                 match change {
                                     BuilderChange::Up => {
                                         if task.is_none() {
-                                            task = Some(spawn(Self::build_blocks::<TestVersions>(
+                                            task = Some(spawn(Self::build_blocks(
                                                 self.config.clone(),
                                                 self.num_nodes.clone(),
                                                 self.pub_key.clone(),

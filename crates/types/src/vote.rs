@@ -16,9 +16,10 @@ use std::{
 use async_lock::RwLock;
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
+use either::Either;
 use primitive_types::U256;
 use tracing::error;
-use utils::anytrace::*;
+use utils::anytrace::Result;
 
 use crate::{
     message::UpgradeLock,
@@ -79,31 +80,31 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
         threshold: NonZeroU64,
         upgrade_lock: &UpgradeLock<TYPES, V>,
-    ) -> impl std::future::Future<Output = Result<()>>;
+    ) -> impl std::future::Future<Output = bool>;
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
     fn threshold<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> u64;
 
     /// Get  Stake Table from Membership implementation.
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
 
     /// Get Total Nodes from Membership implementation.
     fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> usize;
 
     /// Get  `StakeTableEntry` from Membership implementation.
     fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
 
     /// Get the commitment which was voted on
@@ -164,8 +165,8 @@ impl<
         &mut self,
         vote: &VOTE,
         membership: &Arc<RwLock<TYPES::Membership>>,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Option<CERT> {
+        epoch: TYPES::Epoch,
+    ) -> Either<(), CERT> {
         let key = vote.signing_key();
 
         let vote_commitment = match VersionedVoteData::new(
@@ -178,25 +179,31 @@ impl<
             Ok(data) => data.commit(),
             Err(e) => {
                 tracing::warn!("Failed to generate versioned vote data: {e}");
-                return None;
+                return Either::Left(());
             }
         };
 
         if !key.validate(&vote.signature(), vote_commitment.as_ref()) {
             error!("Invalid vote! Vote Data {:?}", vote.date());
-            return None;
+            return Either::Left(());
         }
 
         let membership_reader = membership.read().await;
-        let stake_table_entry = CERT::stake_table_entry(&*membership_reader, &key, epoch)?;
+        let Some(stake_table_entry) = CERT::stake_table_entry(&*membership_reader, &key, epoch)
+        else {
+            return Either::Left(());
+        };
         let stake_table = CERT::stake_table(&*membership_reader, epoch);
         let total_nodes = CERT::total_nodes(&*membership_reader, epoch);
         let threshold = CERT::threshold(&*membership_reader, epoch);
         drop(membership_reader);
 
-        let vote_node_id = stake_table
+        let Some(vote_node_id) = stake_table
             .iter()
-            .position(|x| *x == stake_table_entry.clone())?;
+            .position(|x| *x == stake_table_entry.clone())
+        else {
+            return Either::Left(());
+        };
 
         let original_signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType =
             vote.signature();
@@ -208,7 +215,7 @@ impl<
 
         // Check for duplicate vote
         if total_vote_map.contains_key(&key) {
-            return None;
+            return Either::Left(());
         }
         let (signers, sig_list) = self
             .signers
@@ -216,7 +223,7 @@ impl<
             .or_insert((bitvec![0; total_nodes], Vec::new()));
         if signers.get(vote_node_id).as_deref() == Some(&true) {
             error!("Node id is already in signers list");
-            return None;
+            return Either::Left(());
         }
         signers.set(vote_node_id, true);
         sig_list.push(original_signature);
@@ -244,9 +251,9 @@ impl<
                 real_qc_sig,
                 vote.view_number(),
             );
-            return Some(cert);
+            return Either::Right(cert);
         }
-        None
+        Either::Left(())
     }
 }
 

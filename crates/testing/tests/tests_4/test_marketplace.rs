@@ -30,13 +30,14 @@ cross_tests!(
     Versions: [MarketplaceTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
+        TestDescription {
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
                                                  duration: Duration::from_secs(60),
                                              },
                                          ),
+            epoch_height: 0,
             fallback_builder:
               BuilderDescription {
                 changes: HashMap::from([(0, BuilderChange::Down)])
@@ -44,11 +45,7 @@ cross_tests!(
             validate_transactions: nonempty_block_limit((0,100)),
             start_solver: false,
             ..TestDescription::default()
-        };
-
-        metadata.test_config.epoch_height = 0;
-
-        metadata
+        }
     },
 );
 
@@ -62,21 +59,18 @@ cross_tests!(
     Versions: [MarketplaceUpgradeTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
+        TestDescription {
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
                                                  duration: Duration::from_secs(60),
                                              },
                                          ),
+            epoch_height: 0,
             upgrade_view: Some(5),
             validate_transactions: nonempty_block_threshold((40,50)),
             ..TestDescription::default()
-        };
-
-        metadata.test_config.epoch_height = 0;
-
-        metadata
+        }
     },
 );
 
@@ -89,13 +83,14 @@ cross_tests!(
     Versions: [MarketplaceTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
+        TestDescription {
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
                                                  duration: Duration::from_secs(60),
                                              },
                                          ),
+            epoch_height: 0,
             builders: vec1![
               BuilderDescription {
                 changes: HashMap::from([(0, BuilderChange::Down)])
@@ -106,11 +101,7 @@ cross_tests!(
             ],
             validate_transactions: nonempty_block_threshold((35,50)),
             ..TestDescription::default()
-        };
-
-        metadata.test_config.epoch_height = 0;
-
-        metadata
+        }
     },
 );
 
@@ -123,13 +114,14 @@ cross_tests!(
     Versions: [MarketplaceTestVersions],
     Ignore: false,
     Metadata: {
-        let mut metadata = TestDescription {
+        TestDescription {
             // allow more time to pass in CI
             completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
                                              TimeBasedCompletionTaskDescription {
                                                  duration: Duration::from_secs(60),
                                              },
                                          ),
+            epoch_height: 0,
             builders: vec1![
               BuilderDescription {
                 changes: HashMap::from([(0, BuilderChange::Down)])
@@ -142,10 +134,6 @@ cross_tests!(
               },
             validate_transactions: nonempty_block_threshold((40,50)),
             ..TestDescription::default()
-        };
-
-        metadata.test_config.epoch_height = 0;
-
-        metadata
+        }
     },
 );

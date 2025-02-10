@@ -7,7 +7,7 @@
 //! Utility functions, type aliases, helper structs and enum definitions.
 
 use std::{
-    hash::{Hash, Hasher},
+    hash::{DefaultHasher, Hash, Hasher},
     ops::Deref,
     sync::Arc,
 };
@@ -26,14 +26,10 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
 use typenum::Unsigned;
-use vbs::version::StaticVersionType;
 
 use crate::{
     data::Leaf2,
-    traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
-        ValidatedState,
-    },
+    traits::{node_implementation::NodeType, ValidatedState},
     vid::VidCommitment,
 };
 
@@ -50,7 +46,7 @@ pub enum ViewInner<TYPES: NodeType> {
         /// Payload commitment to the available block.
         payload_commitment: VidCommitment,
         /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     },
     /// Undecided view
     Leaf {
@@ -61,7 +57,7 @@ pub enum ViewInner<TYPES: NodeType> {
         /// Optional state delta.
         delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
         /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     },
     /// Leaf has failed
     Failed,
@@ -141,7 +137,7 @@ impl<TYPES: NodeType> ViewInner<TYPES> {
         }
     }
 
-    /// return the underlying block payload commitment if it exists
+    /// return the underlying block paylod commitment if it exists
     #[must_use]
     pub fn payload_commitment(&self) -> Option<VidCommitment> {
         if let Self::Da {
@@ -155,8 +151,7 @@ impl<TYPES: NodeType> ViewInner<TYPES> {
     }
 
     /// Returns `Epoch` if possible
-    /// #3967 REVIEW NOTE: This type is kinda ugly, should we Result<Option<Epoch>> instead?
-    pub fn epoch(&self) -> Option<Option<TYPES::Epoch>> {
+    pub fn epoch(&self) -> Option<TYPES::Epoch> {
         match self {
             Self::Da { epoch, .. } | Self::Leaf { epoch, .. } => Some(*epoch),
             Self::Failed => None,
@@ -257,53 +252,18 @@ pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
     }
 }
 
-/// Returns the block number of the epoch root in the given epoch
-///
-/// WARNING: This is NOT the root block for the given epoch.
-/// To find that root block number for epoch e, call `root_block_in_epoch(e-2,_)`.
-#[must_use]
-pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
-    if epoch_height == 0 || epoch < 1 {
-        0
-    } else {
-        epoch_height * epoch - 2
-    }
-}
-
-/// Returns an Option<Epoch> based on a boolean condition of whether or not epochs are enabled, a block number,
-/// and the epoch height. If epochs are disabled or the epoch height is zero, returns None.
-#[must_use]
-pub fn option_epoch_from_block_number<TYPES: NodeType>(
-    with_epoch: bool,
-    block_number: u64,
-    epoch_height: u64,
-) -> Option<TYPES::Epoch> {
-    if with_epoch {
-        if epoch_height == 0 {
-            None
-        } else if block_number % epoch_height == 0 {
-            Some(block_number / epoch_height)
-        } else {
-            Some(block_number / epoch_height + 1)
-        }
-        .map(TYPES::Epoch::new)
-    } else {
-        None
-    }
-}
-
-/// Returns Some(0) if epochs are enabled by V::Base, otherwise returns None
-#[must_use]
-pub fn genesis_epoch_from_version<V: Versions, TYPES: NodeType>() -> Option<TYPES::Epoch> {
-    (V::Base::VERSION >= V::Epochs::VERSION).then(|| TYPES::Epoch::new(1))
-}
-
 /// A function for generating a cute little user mnemonic from a hash
 #[must_use]
 pub fn mnemonic<H: Hash>(bytes: H) -> String {
-    let mut state = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut state);
-    mnemonic::to_string(state.finish().to_le_bytes())
+    let hash = non_crypto_hash(bytes);
+    mnemonic::to_string(hash.to_le_bytes())
+}
+
+/// A helper function to generate a non-cryptographic hash
+pub fn non_crypto_hash<H: Hash>(val: H) -> u64 {
+    let mut state = DefaultHasher::new();
+    val.hash(&mut state);
+    state.finish()
 }
 
 /// A helper enum to indicate whether a node is in the epoch transition
@@ -334,72 +294,5 @@ pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
         false
     } else {
         (block_number + 2) % epoch_height == 0
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_epoch_from_block_number() {
-        // block 0 is always epoch 0
-        let epoch = epoch_from_block_number(0, 10);
-        assert_eq!(0, epoch);
-
-        let epoch = epoch_from_block_number(1, 10);
-        assert_eq!(1, epoch);
-
-        let epoch = epoch_from_block_number(10, 10);
-        assert_eq!(1, epoch);
-
-        let epoch = epoch_from_block_number(11, 10);
-        assert_eq!(2, epoch);
-
-        let epoch = epoch_from_block_number(20, 10);
-        assert_eq!(2, epoch);
-
-        let epoch = epoch_from_block_number(21, 10);
-        assert_eq!(3, epoch);
-
-        let epoch = epoch_from_block_number(21, 0);
-        assert_eq!(0, epoch);
-    }
-
-    #[test]
-    fn test_is_last_block_in_epoch() {
-        assert!(!is_last_block_in_epoch(8, 10));
-        assert!(!is_last_block_in_epoch(9, 10));
-        assert!(is_last_block_in_epoch(10, 10));
-        assert!(!is_last_block_in_epoch(11, 10));
-
-        assert!(!is_last_block_in_epoch(10, 0));
-    }
-
-    #[test]
-    fn test_is_epoch_root() {
-        assert!(is_epoch_root(8, 10));
-        assert!(!is_epoch_root(9, 10));
-        assert!(!is_epoch_root(10, 10));
-        assert!(!is_epoch_root(11, 10));
-
-        assert!(!is_last_block_in_epoch(10, 0));
-    }
-
-    #[test]
-    fn test_root_block_in_epoch() {
-        // block 0 is always epoch 0
-        let epoch = 3;
-        let epoch_height = 10;
-        let epoch_root_block_number = root_block_in_epoch(3, epoch_height);
-
-        assert!(is_epoch_root(28, epoch_height));
-
-        assert_eq!(epoch_root_block_number, 28);
-
-        assert_eq!(
-            epoch,
-            epoch_from_block_number(epoch_root_block_number, epoch_height)
-        );
     }
 }

@@ -15,9 +15,8 @@ use async_trait::async_trait;
 use hotshot_types::{
     consensus::CommitmentMap,
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper,
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2, VidDisperseShare,
+        VidDisperseShare2,
     },
     event::HotShotAction,
     message::Proposal,
@@ -34,11 +33,11 @@ use jf_vid::VidScheme;
 
 use crate::testable_delay::{DelayConfig, SupportedTraitTypesForAsyncDelay, TestableDelay};
 
-type VidShares<TYPES> = BTreeMap<
+type VidShares<TYPES> = HashMap<
     <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, ADVZDisperseShare<TYPES>>>,
+    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
 >;
-type VidShares2<TYPES> = BTreeMap<
+type VidShares2<TYPES> = HashMap<
     <TYPES as NodeType>::View,
     HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare2<TYPES>>>,
 >;
@@ -51,30 +50,28 @@ pub struct TestStorageState<TYPES: NodeType> {
     da2s: HashMap<TYPES::View, Proposal<TYPES, DaProposal2<TYPES>>>,
     proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal<TYPES>>>,
     proposals2: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>>,
-    proposals_wrapper: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
     high_qc: Option<hotshot_types::simple_certificate::QuorumCertificate<TYPES>>,
     high_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
     next_epoch_high_qc2:
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
+    epoch: TYPES::Epoch,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
     fn default() -> Self {
         Self {
-            vids: BTreeMap::new(),
-            vid2: BTreeMap::new(),
+            vids: HashMap::new(),
+            vid2: HashMap::new(),
             das: HashMap::new(),
             da2s: HashMap::new(),
             proposals: BTreeMap::new(),
             proposals2: BTreeMap::new(),
-            proposals_wrapper: BTreeMap::new(),
             high_qc: None,
             next_epoch_high_qc2: None,
             high_qc2: None,
             action: TYPES::View::genesis(),
-            epoch: None,
+            epoch: TYPES::Epoch::genesis(),
         }
     }
 }
@@ -112,37 +109,29 @@ impl<TYPES: NodeType> TestableDelay for TestStorage<TYPES> {
 impl<TYPES: NodeType> TestStorage<TYPES> {
     pub async fn proposals_cloned(
         &self,
-    ) -> BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
-        self.inner.read().await.proposals_wrapper.clone()
+    ) -> BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposal2<TYPES>>> {
+        self.inner.read().await.proposals2.clone()
     }
-
     pub async fn high_qc_cloned(&self) -> Option<QuorumCertificate2<TYPES>> {
         self.inner.read().await.high_qc2.clone()
     }
-
     pub async fn next_epoch_high_qc_cloned(&self) -> Option<NextEpochQuorumCertificate2<TYPES>> {
         self.inner.read().await.next_epoch_high_qc2.clone()
     }
-
     pub async fn decided_upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
         self.decided_upgrade_certificate.read().await.clone()
     }
-
     pub async fn last_actioned_view(&self) -> TYPES::View {
         self.inner.read().await.action
     }
-
-    pub async fn last_actioned_epoch(&self) -> Option<TYPES::Epoch> {
+    pub async fn last_actioned_epoch(&self) -> TYPES::Epoch {
         self.inner.read().await.epoch
-    }
-    pub async fn vids_cloned(&self) -> VidShares2<TYPES> {
-        self.inner.read().await.vid2.clone()
     }
 }
 
 #[async_trait]
 impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
-    async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()> {
+    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()> {
         if self.should_return_err {
             bail!("Failed to append VID proposal to storage");
         }
@@ -179,7 +168,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         _vid_commit: <VidSchemeType as VidScheme>::Commit,
     ) -> Result<()> {
         if self.should_return_err {
-            bail!("Failed to append DA proposal to storage");
+            bail!("Failed to append VID proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         let mut inner = self.inner.write().await;
@@ -188,14 +177,13 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             .insert(proposal.data.view_number, proposal.clone());
         Ok(())
     }
-
     async fn append_da2(
         &self,
         proposal: &Proposal<TYPES, DaProposal2<TYPES>>,
         _vid_commit: <VidSchemeType as VidScheme>::Commit,
     ) -> Result<()> {
         if self.should_return_err {
-            bail!("Failed to append DA proposal (2) to storage");
+            bail!("Failed to append VID proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         let mut inner = self.inner.write().await;
@@ -204,13 +192,12 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             .insert(proposal.data.view_number, proposal.clone());
         Ok(())
     }
-
     async fn append_proposal(
         &self,
         proposal: &Proposal<TYPES, QuorumProposal<TYPES>>,
     ) -> Result<()> {
         if self.should_return_err {
-            bail!("Failed to append Quorum proposal (1) to storage");
+            bail!("Failed to append VID proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         let mut inner = self.inner.write().await;
@@ -219,13 +206,12 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             .insert(proposal.data.view_number, proposal.clone());
         Ok(())
     }
-
     async fn append_proposal2(
         &self,
         proposal: &Proposal<TYPES, QuorumProposal2<TYPES>>,
     ) -> Result<()> {
         if self.should_return_err {
-            bail!("Failed to append Quorum proposal (2) to storage");
+            bail!("Failed to append VID proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         let mut inner = self.inner.write().await;
@@ -235,38 +221,17 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn append_proposal_wrapper(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err {
-            bail!("Failed to append Quorum proposal (wrapped) to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        inner
-            .proposals_wrapper
-            .insert(proposal.data.view_number(), proposal.clone());
-        Ok(())
-    }
-
     async fn record_action(
         &self,
         view: <TYPES as NodeType>::View,
-        epoch: Option<TYPES::Epoch>,
         action: hotshot_types::event::HotShotAction,
     ) -> Result<()> {
         if self.should_return_err {
             bail!("Failed to append Action to storage");
         }
         let mut inner = self.inner.write().await;
-        if matches!(action, HotShotAction::Vote | HotShotAction::Propose) {
-            if view > inner.action {
-                inner.action = view;
-            }
-            if epoch > inner.epoch {
-                inner.epoch = epoch;
-            }
+        if view > inner.action && matches!(action, HotShotAction::Vote | HotShotAction::Propose) {
+            inner.action = view;
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         Ok(())
@@ -309,7 +274,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         }
         Ok(())
     }
-
     async fn update_next_epoch_high_qc2(
         &self,
         new_next_epoch_high_qc: hotshot_types::simple_certificate::NextEpochQuorumCertificate2<
@@ -330,7 +294,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         }
         Ok(())
     }
-
     async fn update_undecided_state(
         &self,
         _leaves: CommitmentMap<Leaf<TYPES>>,
@@ -342,7 +305,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Self::run_delay_settings_from_config(&self.delay_config).await;
         Ok(())
     }
-
     async fn update_undecided_state2(
         &self,
         _leaves: CommitmentMap<Leaf2<TYPES>>,
@@ -354,7 +316,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Self::run_delay_settings_from_config(&self.delay_config).await;
         Ok(())
     }
-
     async fn update_decided_upgrade_certificate(
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,

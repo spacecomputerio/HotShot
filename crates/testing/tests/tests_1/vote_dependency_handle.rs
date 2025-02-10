@@ -15,7 +15,7 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     traits::{consensus_api::ConsensusApi, node_implementation::ConsensusTime},
 };
 use itertools::Itertools;
@@ -38,7 +38,7 @@ async fn test_vote_dependency_handle() {
         .0;
     let membership = Arc::clone(&handle.hotshot.memberships);
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let mut generator = TestViewGenerator::generate(membership);
 
     // Generate our state for the test
     let mut proposals = Vec::new();
@@ -76,7 +76,7 @@ async fn test_vote_dependency_handle() {
     for inputs in all_inputs.into_iter() {
         // The outputs are static here, but we re-make them since we use `into_iter` below
         let outputs = vec![
-            exact(ViewChange(ViewNumber::new(3), None)),
+            exact(ViewChange(ViewNumber::new(3), EpochNumber::new(0))),
             quorum_vote_send(),
         ];
 
@@ -96,7 +96,6 @@ async fn test_vote_dependency_handle() {
                 sender: event_sender.clone(),
                 receiver: event_receiver.clone().deactivate(),
                 upgrade_lock: handle.hotshot.upgrade_lock.clone(),
-                id: handle.hotshot.id,
                 epoch_height: handle.hotshot.config.epoch_height,
             };
 

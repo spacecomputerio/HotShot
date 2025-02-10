@@ -23,7 +23,7 @@ use tracing::instrument;
 async fn libp2p_network_sync() {
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -37,13 +37,12 @@ async fn libp2p_network_sync() {
             delay_high_ms: 30,
             delay_low_ms: 4,
         })),
+        epoch_height: 0,
         ..TestDescription::default_multiple_rounds()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -62,7 +61,7 @@ async fn test_memory_network_sync() {
 
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
@@ -73,13 +72,11 @@ async fn test_memory_network_sync() {
             delay_high_ms: 30,
             delay_low_ms: 4,
         })),
+        epoch_height: 0,
         ..TestDescription::default()
     };
-
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -91,7 +88,7 @@ async fn test_memory_network_sync() {
 async fn libp2p_network_async() {
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             num_failed_views: 50,
@@ -113,13 +110,12 @@ async fn libp2p_network_async() {
             delay_low_ms: 4,
             delay_high_ms: 30,
         })),
+        epoch_height: 0,
         ..TestDescription::default_multiple_rounds()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -139,7 +135,7 @@ async fn test_memory_network_async() {
 
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             num_failed_views: 5000,
@@ -162,13 +158,11 @@ async fn test_memory_network_async() {
             delay_low_ms: 4,
             delay_high_ms: 30,
         })),
+        epoch_height: 0,
         ..TestDescription::default()
     };
-
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -187,7 +181,7 @@ async fn test_memory_network_partially_sync() {
 
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_failed_views: 0,
             ..Default::default()
@@ -216,13 +210,11 @@ async fn test_memory_network_partially_sync() {
             gst: std::time::Duration::from_millis(1000),
             start: Instant::now(),
         })),
+        epoch_height: 0,
         ..TestDescription::default()
     };
-
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -233,7 +225,7 @@ async fn test_memory_network_partially_sync() {
 async fn libp2p_network_partially_sync() {
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_failed_views: 0,
             ..Default::default()
@@ -257,13 +249,12 @@ async fn libp2p_network_partially_sync() {
             gst: std::time::Duration::from_millis(1000),
             start: Instant::now(),
         })),
+        epoch_height: 0,
         ..TestDescription::default_multiple_rounds()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -283,7 +274,7 @@ async fn test_memory_network_chaos() {
 
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
@@ -298,13 +289,11 @@ async fn test_memory_network_chaos() {
             repeat_low: 1,
             repeat_high: 5,
         })),
+        epoch_height: 0,
         ..TestDescription::default()
     };
-
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;
@@ -316,7 +305,7 @@ async fn test_memory_network_chaos() {
 async fn libp2p_network_chaos() {
     hotshot::helpers::initialize_logging();
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -334,13 +323,12 @@ async fn libp2p_network_chaos() {
             repeat_low: 1,
             repeat_high: 5,
         })),
+        epoch_height: 0,
         ..TestDescription::default_multiple_rounds()
     };
 
-    metadata.test_config.epoch_height = 0;
-
     metadata
-        .gen_launcher()
+        .gen_launcher(0)
         .launch()
         .run_test::<SimpleBuilderImplementation>()
         .await;

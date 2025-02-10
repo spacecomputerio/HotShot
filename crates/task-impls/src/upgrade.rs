@@ -12,6 +12,10 @@ use async_trait::async_trait;
 use committable::Committable;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
+    constants::{
+        UPGRADE_BEGIN_OFFSET, UPGRADE_DECIDE_BY_OFFSET, UPGRADE_FINISH_OFFSET,
+        UPGRADE_PROPOSE_OFFSET,
+    },
     data::UpgradeProposal,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
@@ -44,7 +48,7 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
     pub cur_view: TYPES::View,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: TYPES::Epoch,
 
     /// Membership for Quorum Certs/votes
     pub membership: Arc<RwLock<TYPES::Membership>>,
@@ -57,9 +61,6 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
 
     /// This Nodes private key
     pub private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-
-    /// This state's ID
-    pub id: u64,
 
     /// View to start proposing an upgrade
     pub start_proposing_view: u64,
@@ -100,7 +101,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
     }
 
     /// main task event handler
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "Upgrade Task", level = "error")]
+    #[instrument(skip_all, fields(view = *self.cur_view, epoch = *self.cur_epoch), name = "Upgrade Task", level = "error")]
     pub async fn handle(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -237,7 +238,6 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     self.public_key.clone(),
                     &self.membership,
                     self.cur_epoch,
-                    self.id,
                     &event,
                     &tx,
                     &self.upgrade_lock,
@@ -263,7 +263,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     .as_secs();
 
                 let leader = self.membership.read().await.leader(
-                    TYPES::View::new(view + TYPES::UPGRADE_CONSTANTS.propose_offset),
+                    TYPES::View::new(view + UPGRADE_PROPOSE_OFFSET),
                     self.cur_epoch,
                 )?;
 
@@ -279,22 +279,15 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                         old_version: V::Base::VERSION,
                         new_version: V::Upgrade::VERSION,
                         new_version_hash: V::UPGRADE_HASH.to_vec(),
-                        old_version_last_view: TYPES::View::new(
-                            view + TYPES::UPGRADE_CONSTANTS.begin_offset,
-                        ),
-                        new_version_first_view: TYPES::View::new(
-                            view + TYPES::UPGRADE_CONSTANTS.finish_offset,
-                        ),
-                        decide_by: TYPES::View::new(
-                            view + TYPES::UPGRADE_CONSTANTS.decide_by_offset,
-                        ),
+                        old_version_last_view: TYPES::View::new(view + UPGRADE_BEGIN_OFFSET),
+                        new_version_first_view: TYPES::View::new(view + UPGRADE_FINISH_OFFSET),
+                        decide_by: TYPES::View::new(view + UPGRADE_DECIDE_BY_OFFSET),
                     };
 
                     let upgrade_proposal = UpgradeProposal {
                         upgrade_proposal: upgrade_proposal_data.clone(),
-                        view_number: TYPES::View::new(
-                            view + TYPES::UPGRADE_CONSTANTS.propose_offset,
-                        ),
+                        view_number: TYPES::View::new(view + UPGRADE_PROPOSE_OFFSET),
+                        epoch: self.cur_epoch,
                     };
 
                     let signature = TYPES::SignatureKey::sign(

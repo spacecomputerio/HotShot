@@ -22,14 +22,14 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         auction_results_provider::AuctionResultsProvider,
-        block_contents::{BuilderFee, EncodeBytes},
+        block_contents::{precompute_vid_commitment, BuilderFee, EncodeBytes},
         election::Membership,
         node_implementation::{ConsensusTime, HasUrls, NodeImplementation, NodeType, Versions},
         signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload,
     },
     utils::ViewInner,
-    vid::VidCommitment,
+    vid::{VidCommitment, VidPrecomputeData},
 };
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
@@ -72,6 +72,9 @@ pub struct BuilderResponse<TYPES: NodeType> {
 
     /// Block metadata
     pub metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+
+    /// Optional precomputed commitment
+    pub precompute_data: Option<VidPrecomputeData>,
 }
 
 /// Tracks state of a Transaction task
@@ -86,7 +89,7 @@ pub struct TransactionTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub cur_view: TYPES::View,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: TYPES::Epoch,
 
     /// Reference to consensus. Leader will require a read lock on this.
     pub consensus: OuterConsensus<TYPES>,
@@ -105,9 +108,6 @@ pub struct TransactionTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// InstanceState
     pub instance_state: Arc<TYPES::InstanceState>,
-
-    /// This state's ID
-    pub id: u64,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -128,7 +128,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         &mut self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
         block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_epoch: TYPES::Epoch,
     ) -> Option<HotShotTaskCompleted> {
         let version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
@@ -148,12 +148,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
     }
 
     /// legacy view change handler
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view), name = "Transaction task", level = "error", target = "TransactionTaskState")]
+    #[instrument(skip_all, fields(view = *self.cur_view), name = "Transaction task", level = "error", target = "TransactionTaskState")]
     pub async fn handle_view_change_legacy(
         &mut self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
         block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_epoch: TYPES::Epoch,
     ) -> Option<HotShotTaskCompleted> {
         let version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
@@ -183,6 +183,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             block_payload,
             metadata,
             fee,
+            precompute_data,
         }) = block
         {
             broadcast_event(
@@ -192,6 +193,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     block_view,
                     block_epoch,
                     vec1::vec1![fee],
+                    precompute_data,
                     None,
                 ))),
                 event_stream,
@@ -223,6 +225,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             // Create an empty block payload and metadata
             let (_, metadata) = <TYPES as NodeType>::BlockPayload::empty();
 
+            let (_, precompute_data) = precompute_vid_commitment(&[], membership_total_nodes);
+
             // Broadcast the empty block
             broadcast_event(
                 Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
@@ -231,6 +235,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     block_view,
                     block_epoch,
                     vec1::vec1![null_fee],
+                    Some(precompute_data),
                     None,
                 ))),
                 event_stream,
@@ -249,7 +254,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
     async fn produce_block_marketplace(
         &mut self,
         block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_epoch: TYPES::Epoch,
         task_start_time: Instant,
     ) -> Result<PackedBundle<TYPES>> {
         ensure!(
@@ -344,6 +349,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             block_view,
             block_epoch,
             sequencing_fees,
+            None,
             Some(auction_result),
         ))
     }
@@ -352,7 +358,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
     pub async fn null_block(
         &self,
         block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_epoch: TYPES::Epoch,
         version: Version,
     ) -> Option<PackedBundle<TYPES>> {
         let membership_total_nodes = self.membership.read().await.total_nodes(self.cur_epoch);
@@ -366,12 +372,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         // Create an empty block payload and metadata
         let (_, metadata) = <TYPES as NodeType>::BlockPayload::empty();
 
+        let (_, precompute_data) = precompute_vid_commitment(&[], membership_total_nodes);
+
         Some(PackedBundle::new(
             vec![].into(),
             metadata,
             block_view,
             block_epoch,
             vec1::vec1![null_fee],
+            Some(precompute_data),
             Some(TYPES::AuctionResult::default()),
         ))
     }
@@ -382,7 +391,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         &mut self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
         block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_epoch: TYPES::Epoch,
     ) -> Option<HotShotTaskCompleted> {
         let task_start_time = Instant::now();
 
@@ -430,12 +439,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
     }
 
     /// epochs view change handler
-    #[instrument(skip_all, fields(id = self.id, view_number = *self.cur_view))]
+    #[instrument(skip_all, fields(view_number = *self.cur_view))]
     pub async fn handle_view_change_epochs(
         &mut self,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
         block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
+        block_epoch: TYPES::Epoch,
     ) -> Option<HotShotTaskCompleted> {
         if self.consensus.read().await.is_high_qc_forming_eqc() {
             tracing::info!("Reached end of epoch. Not getting a new block until we form an eQC.");
@@ -447,7 +456,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
     }
 
     /// main task event handler
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "Transaction task", level = "error", target = "TransactionTaskState")]
+    #[instrument(skip_all, fields(view = *self.cur_view, epoch = *self.cur_epoch), name = "Transaction task", level = "error", target = "TransactionTaskState")]
     pub async fn handle(
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
@@ -468,17 +477,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             }
             HotShotEvent::ViewChange(view, epoch) => {
                 let view = TYPES::View::new(std::cmp::max(1, **view));
-                let epoch = if self.upgrade_lock.epochs_enabled(view).await {
-                    // #3967 REVIEW NOTE: Double check this logic
-                    Some(TYPES::Epoch::new(std::cmp::max(
-                        1,
-                        epoch.map(|x| *x).unwrap_or(0),
-                    )))
+                let epoch = if self.epoch_height != 0 {
+                    TYPES::Epoch::new(std::cmp::max(1, **epoch))
                 } else {
                     *epoch
                 };
                 ensure!(
-                    *view > *self.cur_view && epoch >= self.cur_epoch,
+                    *view > *self.cur_view && *epoch >= *self.cur_epoch,
                     debug!(
                       "Received a view change to an older view and epoch: tried to change view to {:?}\
                       and epoch {:?} though we are at view {:?} and epoch {:?}",
@@ -501,7 +506,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
 
     /// Get VID commitment for the last successful view before `block_view`.
     /// Returns None if we don't have said commitment recorded.
-    #[instrument(skip_all, target = "TransactionTaskState", fields(id = self.id, cur_view = *self.cur_view, block_view = *block_view))]
+    #[instrument(skip_all, target = "TransactionTaskState", fields(cur_view = *self.cur_view, block_view = *block_view))]
     async fn last_vid_commitment_retry(
         &self,
         block_view: TYPES::View,
@@ -522,7 +527,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
 
     /// Get VID commitment for the last successful view before `block_view`.
     /// Returns None if we don't have said commitment recorded.
-    #[instrument(skip_all, target = "TransactionTaskState", fields(id = self.id, cur_view = *self.cur_view, block_view = *block_view))]
+    #[instrument(skip_all, target = "TransactionTaskState", fields(cur_view = *self.cur_view, block_view = *block_view))]
     async fn last_vid_commitment(
         &self,
         block_view: TYPES::View,
@@ -560,7 +565,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         }
     }
 
-    #[instrument(skip_all, fields(id = self.id, cur_view = *self.cur_view, block_view = *block_view), name = "wait_for_block", level = "error")]
+    #[instrument(skip_all, fields(cur_view = *self.cur_view, block_view = *block_view), name = "wait_for_block", level = "error")]
     async fn wait_for_block(&self, block_view: TYPES::View) -> Option<BuilderResponse<TYPES>> {
         let task_start_time = Instant::now();
 
@@ -690,7 +695,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
     /// # Errors
     /// If none of the builder reports any available blocks or claiming block fails for all of the
     /// builders.
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view), name = "block_from_builder", level = "error")]
+    #[instrument(skip_all, fields(view = *self.cur_view), name = "block_from_builder", level = "error")]
     async fn block_from_builder(
         &self,
         parent_comm: VidCommitment,
@@ -716,6 +721,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         if available_blocks.is_empty() {
             bail!("No available blocks");
         }
+
+        let version = match self.upgrade_lock.version(view_number).await {
+            Ok(v) => v,
+            Err(err) => {
+                bail!("Upgrade certificate requires unsupported version, refusing to request blocks: {}", err);
+            }
+        };
 
         for (block_info, builder_idx) in available_blocks {
             // Verify signature over chosen block.
@@ -743,9 +755,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             let response = {
                 let client = &self.builder_clients[builder_idx];
 
-                let (block, header_input) = futures::join! {
-                    client.claim_block(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
-                    client.claim_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
+                // If epochs are supported, provide the latest `num_nodes` information to the
+                // builder for VID computation.
+                let (block, header_input) = if version >= V::Epochs::VERSION {
+                    let total_nodes = self.membership.read().await.total_nodes(self.cur_epoch);
+                    futures::join! {
+                        client.claim_block_with_num_nodes(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature, total_nodes),
+                        client.claim_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
+                    }
+                } else {
+                    futures::join! {
+                        client.claim_block(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
+                        client.claim_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
+                    }
                 };
 
                 let block_data = match block {
@@ -790,6 +812,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     fee,
                     block_payload: block_data.block_payload,
                     metadata: block_data.metadata,
+                    precompute_data: Some(header_input.vid_precompute_data),
                 }
             };
 

@@ -17,7 +17,6 @@ use std::{
 use ark_serialize::SerializationError;
 use bitvec::prelude::*;
 use committable::Committable;
-use jf_signature::SignatureError;
 use jf_vid::VidScheme;
 use primitive_types::U256;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -155,15 +154,8 @@ pub trait SignatureKey:
         threshold: U256,
     ) -> Self::QcParams;
 
-    /// check the quorum certificate for the assembled signature, returning `Ok(())` if it is valid.
-    ///
-    /// # Errors
-    /// Returns an error if the signature key fails to validate
-    fn check(
-        real_qc_pp: &Self::QcParams,
-        data: &[u8],
-        qc: &Self::QcType,
-    ) -> Result<(), SignatureError>;
+    /// check the quorum certificate for the assembled signature
+    fn check(real_qc_pp: &Self::QcParams, data: &[u8], qc: &Self::QcType) -> bool;
 
     /// get the assembled signature and the `BitVec` separately from the assembled signature
     fn sig_proof(signature: &Self::QcType) -> (Self::PureAssembledSignatureType, BitVec);

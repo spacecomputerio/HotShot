@@ -28,13 +28,11 @@ use hotshot_types::{
     constants::EVENT_CHANNEL_SIZE,
     data::Leaf2,
     event::Event,
-    message::convert_proposal,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2},
     traits::{
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
-    utils::genesis_epoch_from_version,
     vote::HasViewNumber,
     ValidatorConfig,
 };
@@ -55,8 +53,6 @@ pub struct SpinningTask<
     I: TestableNodeImplementation<TYPES>,
     V: Versions,
 > {
-    /// epoch height
-    pub epoch_height: u64,
     /// handle to the nodes
     pub(crate) handles: Arc<RwLock<Vec<Node<TYPES, I, V>>>>,
     /// late start nodes
@@ -119,8 +115,8 @@ where
             sender: _,
         } = event
         {
-            if proposal.data.justify_qc().view_number() > self.high_qc.view_number() {
-                self.high_qc = proposal.data.justify_qc().clone();
+            if proposal.data.justify_qc.view_number() > self.high_qc.view_number() {
+                self.high_qc = proposal.data.justify_qc.clone();
             }
         }
 
@@ -157,18 +153,19 @@ where
                                             marketplace_config,
                                         } = late_context_params;
 
-                                        let initializer = HotShotInitializer::<TYPES>::load(
-                                            TestInstanceState::new(self.async_delay_config.clone()),
-                                            self.epoch_height,
+                                        let initializer = HotShotInitializer::<TYPES>::from_reload(
                                             self.last_decided_leaf.clone(),
-                                            (
-                                                TYPES::View::genesis(),
-                                                genesis_epoch_from_version::<V, TYPES>(),
-                                            ),
-                                            (self.high_qc.clone(), self.next_epoch_high_qc.clone()),
-                                            BTreeMap::new(),
-                                            BTreeMap::new(),
+                                            TestInstanceState::new(self.async_delay_config.clone()),
                                             None,
+                                            TYPES::View::genesis(),
+                                            TYPES::Epoch::genesis(),
+                                            TYPES::View::genesis(),
+                                            BTreeMap::new(),
+                                            self.high_qc.clone(),
+                                            self.next_epoch_high_qc.clone(),
+                                            None,
+                                            Vec::new(),
+                                            BTreeMap::new(),
                                         );
                                         // We assign node's public key and stake value rather than read from config file since it's a test
                                         let validator_config =
@@ -177,11 +174,10 @@ where
                                                 node_id,
                                                 1,
                                                 // For tests, make the node DA based on its index
-                                                node_id < config.da_staked_committee_size as u64,
+                                                node_id < config.known_da_nodes.len() as u64,
                                             );
 
                                         TestRunner::add_node_with_config(
-                                            node_id,
                                             network.clone(),
                                             memberships,
                                             initializer,
@@ -221,8 +217,8 @@ where
                         NodeAction::RestartDown(delay_views) => {
                             let node_id = idx.try_into().unwrap();
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
-                                tracing::error!("Node {} shutting down", idx);
                                 node.handle.shut_down().await;
+
                                 // For restarted nodes generate the network on correct view
                                 let generated_network = (self.channel_generator)(node_id).await;
 
@@ -239,40 +235,26 @@ where
                                 let config = node.handle.hotshot.config.clone();
                                 let marketplace_config =
                                     node.handle.hotshot.marketplace_config.clone();
-
                                 let read_storage = storage.read().await;
-                                let next_epoch_high_qc =
-                                    read_storage.next_epoch_high_qc_cloned().await;
-                                let start_view = read_storage.last_actioned_view().await;
-                                let start_epoch = read_storage.last_actioned_epoch().await;
-                                let high_qc = read_storage.high_qc_cloned().await.unwrap_or(
-                                    QuorumCertificate2::genesis::<V>(
-                                        &TestValidatedState::default(),
-                                        &TestInstanceState::default(),
-                                    )
-                                    .await,
-                                );
-                                let saved_proposals = read_storage.proposals_cloned().await;
-                                let mut vid_shares = BTreeMap::new();
-                                for (view, hash_map) in read_storage.vids_cloned().await {
-                                    let mut converted_hash_map = HashMap::new();
-                                    for (key, proposal) in hash_map {
-                                        converted_hash_map.insert(key, convert_proposal(proposal));
-                                    }
-                                    vid_shares.insert(view, converted_hash_map);
-                                }
-                                let decided_upgrade_certificate =
-                                    read_storage.decided_upgrade_certificate().await;
-
-                                let initializer = HotShotInitializer::<TYPES>::load(
-                                    TestInstanceState::new(self.async_delay_config.clone()),
-                                    self.epoch_height,
+                                let initializer = HotShotInitializer::<TYPES>::from_reload(
                                     self.last_decided_leaf.clone(),
-                                    (start_view, start_epoch),
-                                    (high_qc, next_epoch_high_qc),
-                                    saved_proposals,
-                                    vid_shares,
-                                    decided_upgrade_certificate,
+                                    TestInstanceState::new(self.async_delay_config.clone()),
+                                    None,
+                                    read_storage.last_actioned_view().await,
+                                    read_storage.last_actioned_epoch().await,
+                                    read_storage.last_actioned_view().await,
+                                    read_storage.proposals_cloned().await,
+                                    read_storage.high_qc_cloned().await.unwrap_or(
+                                        QuorumCertificate2::genesis::<V>(
+                                            &TestValidatedState::default(),
+                                            &TestInstanceState::default(),
+                                        )
+                                        .await,
+                                    ),
+                                    read_storage.next_epoch_high_qc_cloned().await,
+                                    read_storage.decided_upgrade_certificate().await,
+                                    Vec::new(),
+                                    BTreeMap::new(),
                                 );
                                 // We assign node's public key and stake value rather than read from config file since it's a test
                                 let validator_config = ValidatorConfig::generated_from_seed_indexed(
@@ -280,12 +262,12 @@ where
                                     node_id,
                                     1,
                                     // For tests, make the node DA based on its index
-                                    node_id < config.da_staked_committee_size as u64,
+                                    node_id < config.known_da_nodes.len() as u64,
                                 );
                                 let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
+
                                 let context =
                                     TestRunner::<TYPES, I, V, N>::add_node_with_config_and_channels(
-                                        node_id,
                                         generated_network.clone(),
                                         memberships,
                                         initializer,

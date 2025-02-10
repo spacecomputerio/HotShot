@@ -24,14 +24,16 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{CommitmentAndMetadata, OuterConsensus},
-    data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2},
+    data::{Leaf2, QuorumProposal2, VidDisperse, ViewChangeEvidence},
     message::Proposal,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     traits::{
-        block_contents::BlockHeader, election::Membership, node_implementation::NodeType,
+        block_contents::BlockHeader,
+        election::Membership,
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
     },
-    utils::{is_last_block_in_epoch, option_epoch_from_block_number},
+    utils::{epoch_from_block_number, is_last_block_in_epoch},
     vote::{Certificate, HasViewNumber},
 };
 use tracing::instrument;
@@ -109,9 +111,6 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 
-    /// The node's id
-    pub id: u64,
-
     /// The time this view started
     pub view_start_time: Instant,
 
@@ -143,7 +142,6 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         &self.upgrade_lock,
                     )
                     .await
-                    .is_ok()
                 {
                     return Some(qc.clone());
                 }
@@ -259,12 +257,12 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
     /// Publishes a proposal given the [`CommitmentAndMetadata`], [`VidDisperse`]
     /// and high qc [`hotshot_types::simple_certificate::QuorumCertificate`],
     /// with optional [`ViewChangeEvidence`].
-    #[instrument(skip_all, fields(id = self.id, view_number = *self.view_number, latest_proposed_view = *self.latest_proposed_view))]
+    #[instrument(skip_all, fields(view_number = *self.view_number, latest_proposed_view = *self.latest_proposed_view))]
     async fn publish_proposal(
         &self,
         commitment_and_metadata: CommitmentAndMetadata<TYPES>,
         vid_share: Proposal<TYPES, VidDisperse<TYPES>>,
-        view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
+        view_change_evidence: Option<ViewChangeEvidence<TYPES>>,
         formed_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
         decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
         parent_qc: QuorumCertificate2<TYPES>,
@@ -344,7 +342,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 builder_commitment,
                 metadata,
                 commitment_and_metadata.fees.first().clone(),
-                vid_share.data.vid_common_ref().clone(),
+                vid_share.data.common.clone(),
                 version,
             )
             .await
@@ -360,7 +358,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 commitment_and_metadata.metadata,
                 commitment_and_metadata.fees.to_vec(),
                 *self.view_number,
-                vid_share.data.vid_common_ref().clone(),
+                vid_share.data.common.clone(),
                 commitment_and_metadata.auction_result,
                 version,
             )
@@ -369,12 +367,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .context(warn!("Failed to construct marketplace block header"))?
         };
 
-        let epoch = option_epoch_from_block_number::<TYPES>(
-            version >= V::Epochs::VERSION,
+        let epoch = TYPES::Epoch::new(epoch_from_block_number(
             block_header.block_number(),
             self.epoch_height,
-        );
-
+        ));
         // Make sure we are the leader for the view and epoch.
         // We might have ended up here because we were in the epoch transition.
         if self
@@ -401,31 +397,24 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         };
         let next_drb_result =
             if is_last_block_in_epoch(block_header.block_number(), self.epoch_height) {
-                if let Some(epoch_val) = &epoch {
-                    self.consensus
-                        .read()
-                        .await
-                        .drb_seeds_and_results
-                        .results
-                        .get(epoch_val)
-                        .copied()
-                } else {
-                    None
-                }
+                self.consensus
+                    .read()
+                    .await
+                    .drb_seeds_and_results
+                    .results
+                    .get(&epoch)
+                    .copied()
             } else {
                 None
             };
-        let proposal = QuorumProposalWrapper {
-            proposal: QuorumProposal2 {
-                block_header,
-                view_number: self.view_number,
-                epoch,
-                justify_qc: parent_qc,
-                next_epoch_justify_qc: next_epoch_qc,
-                upgrade_certificate,
-                view_change_evidence: proposal_certificate,
-                next_drb_result,
-            },
+        let proposal = QuorumProposal2 {
+            block_header,
+            view_number: self.view_number,
+            justify_qc: parent_qc,
+            next_epoch_justify_qc: next_epoch_qc,
+            upgrade_certificate,
+            view_change_evidence: proposal_certificate,
+            next_drb_result,
         };
 
         let proposed_leaf = Leaf2::from_quorum_proposal(&proposal);
@@ -538,9 +527,9 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
         }
 
         let proposal_cert = if let Some(view_sync_cert) = view_sync_finalize_cert {
-            Some(ViewChangeEvidence2::ViewSync(view_sync_cert))
+            Some(ViewChangeEvidence::ViewSync(view_sync_cert))
         } else {
-            timeout_certificate.map(ViewChangeEvidence2::Timeout)
+            timeout_certificate.map(ViewChangeEvidence::Timeout)
         };
 
         if let Err(e) = self

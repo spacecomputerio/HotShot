@@ -28,6 +28,7 @@ use jf_vid::{
         payload_prover::{LargeRangeProof, SmallRangeProof},
     },
     payload_prover::{PayloadProver, Statement},
+    precomputable::Precomputable,
     VidDisperse, VidResult, VidScheme,
 };
 use lazy_static::lazy_static;
@@ -36,7 +37,7 @@ use sha2::Sha256;
 
 use crate::{
     constants::SRS_DEGREE,
-    data::{VidDisperse as HotShotVidDisperse, VidDisperseShare},
+    data::{VidDisperse as HotShotVidDisperse, VidDisperseShare2},
     message::Proposal,
 };
 
@@ -58,10 +59,9 @@ use crate::{
 ///
 /// # Panics
 /// When the construction fails for the underlying VID scheme.
-// TODO(Chengyu): move all things below to advz submodule.
 #[must_use]
 #[memoize::memoize(SharedCache, Capacity: 10)]
-pub fn advz_scheme(num_storage_nodes: usize) -> VidSchemeType {
+pub fn vid_scheme(num_storage_nodes: usize) -> VidSchemeType {
     // recovery_threshold is currently num_storage_nodes rounded down to a power of two
     // TODO recovery_threshold should be a function of the desired erasure code rate
     // https://github.com/EspressoSystems/HotShot/issues/2152
@@ -109,10 +109,12 @@ pub type VidCommitment = <VidSchemeType as VidScheme>::Commit;
 pub type VidCommon = <VidSchemeType as VidScheme>::Common;
 /// VID share type
 pub type VidShare = <VidSchemeType as VidScheme>::Share;
+/// VID PrecomputeData type
+pub type VidPrecomputeData = <VidSchemeType as Precomputable>::PrecomputeData;
 /// VID proposal type
 pub type VidProposal<TYPES> = (
     Proposal<TYPES, HotShotVidDisperse<TYPES>>,
-    Vec<Proposal<TYPES, VidDisperseShare<TYPES>>>,
+    Vec<Proposal<TYPES, VidDisperseShare2<TYPES>>>,
 );
 
 #[cfg(not(feature = "gpu-vid"))]
@@ -285,6 +287,33 @@ impl PayloadProver<SmallRangeProofType> for VidSchemeType {
         proof: &SmallRangeProofType,
     ) -> VidResult<Result<(), ()>> {
         self.0.payload_verify(stmt_conversion(stmt), &proof.0)
+    }
+}
+
+impl Precomputable for VidSchemeType {
+    type PrecomputeData = <Advz as Precomputable>::PrecomputeData;
+
+    fn commit_only_precompute<B>(
+        &self,
+        payload: B,
+    ) -> VidResult<(Self::Commit, Self::PrecomputeData)>
+    where
+        B: AsRef<[u8]>,
+    {
+        self.0.commit_only_precompute(payload)
+    }
+
+    fn disperse_precompute<B>(
+        &self,
+        payload: B,
+        data: &Self::PrecomputeData,
+    ) -> VidResult<VidDisperse<Self>>
+    where
+        B: AsRef<[u8]>,
+    {
+        self.0
+            .disperse_precompute(payload, data)
+            .map(vid_disperse_conversion)
     }
 }
 

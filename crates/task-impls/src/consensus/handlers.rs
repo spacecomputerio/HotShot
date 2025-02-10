@@ -70,7 +70,6 @@ pub(crate) async fn handle_quorum_vote_recv<
         task_state.public_key.clone(),
         &task_state.membership,
         vote.data.epoch,
-        task_state.id,
         &event,
         sender,
         &task_state.upgrade_lock,
@@ -78,28 +77,25 @@ pub(crate) async fn handle_quorum_vote_recv<
     )
     .await?;
 
-    if let Some(vote_epoch) = vote.epoch() {
-        // If the vote sender belongs to the next epoch, collect it separately to form the second QC
-        let has_stake = task_state
-            .membership
-            .read()
-            .await
-            .has_stake(&vote.signing_key(), Some(vote_epoch + 1));
-        if has_stake {
-            handle_vote(
-                &mut task_state.next_epoch_vote_collectors,
-                &vote.clone().into(),
-                task_state.public_key.clone(),
-                &task_state.membership,
-                vote.data.epoch,
-                task_state.id,
-                &event,
-                sender,
-                &task_state.upgrade_lock,
-                transition_indicator,
-            )
-            .await?;
-        }
+    // If the vote sender belongs to the next epoch, collect it separately to form the second QC
+    let has_stake = task_state
+        .membership
+        .read()
+        .await
+        .has_stake(&vote.signing_key(), vote.epoch() + 1);
+    if has_stake {
+        handle_vote(
+            &mut task_state.next_epoch_vote_collectors,
+            &vote.clone().into(),
+            task_state.public_key.clone(),
+            &task_state.membership,
+            vote.data.epoch,
+            &event,
+            sender,
+            &task_state.upgrade_lock,
+            transition_indicator,
+        )
+        .await?;
     }
 
     Ok(())
@@ -136,7 +132,6 @@ pub(crate) async fn handle_timeout_vote_recv<
         task_state.public_key.clone(),
         &task_state.membership,
         vote.data.epoch,
-        task_state.id,
         &event,
         sender,
         &task_state.upgrade_lock,
@@ -168,7 +163,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         .membership
         .read()
         .await
-        .leader(new_view_number, task_state.cur_epoch)?;
+        .leader(new_view_number, TYPES::Epoch::new(0))?;
     broadcast_event(
         Arc::new(HotShotEvent::HighQcSend(
             high_qc,
@@ -189,16 +184,18 @@ pub(crate) async fn handle_view_change<
     V: Versions,
 >(
     new_view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    epoch_number: TYPES::Epoch,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {
     if epoch_number > task_state.cur_epoch {
         task_state.cur_epoch = epoch_number;
-        if let Some(new_epoch) = epoch_number {
-            let _ = task_state.consensus.write().await.update_epoch(new_epoch);
-            tracing::info!("Progress: entered epoch {:>6}", *new_epoch);
-        }
+        let _ = task_state
+            .consensus
+            .write()
+            .await
+            .update_epoch(epoch_number);
+        tracing::info!("Progress: entered epoch {:>6}", *epoch_number);
     }
 
     ensure!(
@@ -318,7 +315,7 @@ pub(crate) async fn handle_view_change<
 #[instrument(skip_all)]
 pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     view_number: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
+    epoch: TYPES::Epoch,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {

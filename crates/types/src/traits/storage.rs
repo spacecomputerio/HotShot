@@ -20,9 +20,8 @@ use super::node_implementation::NodeType;
 use crate::{
     consensus::{CommitmentMap, View},
     data::{
-        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper,
+        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2, VidDisperseShare,
+        VidDisperseShare2,
     },
     event::HotShotAction,
     message::{convert_proposal, Proposal},
@@ -36,9 +35,8 @@ use crate::{
 #[async_trait]
 pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
     /// Add a proposal to the stored VID proposals.
-    async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
+    async fn append_vid(&self, proposal: &Proposal<TYPES, VidDisperseShare<TYPES>>) -> Result<()>;
     /// Add a proposal to the stored VID proposals.
-    /// TODO(Chengyu): change here because in the future disperse share types might not be convertible.
     async fn append_vid2(
         &self,
         proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>,
@@ -73,21 +71,8 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
         self.append_proposal(&convert_proposal(proposal.clone()))
             .await
     }
-    /// Add a proposal we sent to the store
-    async fn append_proposal_wrapper(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-    ) -> Result<()> {
-        self.append_proposal(&convert_proposal(proposal.clone()))
-            .await
-    }
     /// Record a HotShotAction taken.
-    async fn record_action(
-        &self,
-        view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
-        action: HotShotAction,
-    ) -> Result<()>;
+    async fn record_action(&self, view: TYPES::View, action: HotShotAction) -> Result<()>;
     /// Update the current high QC in storage.
     async fn update_high_qc(&self, high_qc: QuorumCertificate<TYPES>) -> Result<()>;
     /// Update the current high QC in storage.

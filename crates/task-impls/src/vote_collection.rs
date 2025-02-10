@@ -14,7 +14,7 @@ use std::{
 use async_broadcast::Sender;
 use async_lock::RwLock;
 use async_trait::async_trait;
-use either::Either::{Left, Right};
+use either::Either::{self, Left, Right};
 use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{
@@ -61,10 +61,7 @@ pub struct VoteCollectionTaskState<
     pub view: TYPES::View,
 
     /// The epoch which we are collecting votes for
-    pub epoch: Option<TYPES::Epoch>,
-
-    /// Node id
-    pub id: u64,
+    pub epoch: TYPES::Epoch,
 
     /// Whether we should check if we are the leader when handling a vote
     pub transition_indicator: EpochTransitionIndicator,
@@ -84,7 +81,7 @@ pub trait AggregatableVote<
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey>;
 
     /// return the Hotshot event for the completion of this CERT
@@ -107,7 +104,7 @@ impl<
     pub async fn accumulate_vote(
         &mut self,
         vote: &VOTE,
-        sender_epoch: Option<TYPES::Epoch>,
+        sender_epoch: TYPES::Epoch,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<Option<CERT>> {
         ensure!(
@@ -135,8 +132,8 @@ impl<
             .accumulate(vote, &self.membership, sender_epoch)
             .await
         {
-            None => Ok(None),
-            Some(cert) => {
+            Either::Left(()) => Ok(None),
+            Either::Right(cert) => {
                 tracing::debug!("Certificate Formed! {:?}", cert);
 
                 broadcast_event(
@@ -186,10 +183,7 @@ pub struct AccumulatorInfo<TYPES: NodeType> {
     pub view: TYPES::View,
 
     /// Epoch of the votes we are collecting
-    pub epoch: Option<TYPES::Epoch>,
-
-    /// This nodes id
-    pub id: u64,
+    pub epoch: TYPES::Epoch,
 }
 
 /// Generic function for spawning a vote task.  Returns the event stream id of the spawned task if created
@@ -234,7 +228,6 @@ where
         accumulator: Some(new_accumulator),
         view: info.view,
         epoch: info.epoch,
-        id: info.id,
         transition_indicator,
     };
 
@@ -262,8 +255,7 @@ pub async fn handle_vote<
     vote: &VOTE,
     public_key: TYPES::SignatureKey,
     membership: &Arc<RwLock<TYPES::Membership>>,
-    epoch: Option<TYPES::Epoch>,
-    id: u64,
+    epoch: TYPES::Epoch,
     event: &Arc<HotShotEvent<TYPES>>,
     event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
     upgrade_lock: &UpgradeLock<TYPES, V>,
@@ -280,7 +272,6 @@ where
                 membership: Arc::clone(membership),
                 view: vote.view_number(),
                 epoch,
-                id,
             };
             let collector = create_vote_accumulator(
                 &info,
@@ -359,7 +350,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, QuorumVote<TYPES>, QuorumCertifica
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number() + 1, epoch)
     }
@@ -377,7 +368,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, QuorumVote2<TYPES>, QuorumCertific
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number() + 1, epoch)
     }
@@ -396,7 +387,7 @@ impl<TYPES: NodeType>
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number() + 1, epoch)
     }
@@ -414,7 +405,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, UpgradeVote<TYPES>, UpgradeCertifi
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number(), epoch)
     }
@@ -432,7 +423,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, DaVote2<TYPES>, DaCertificate2<TYP
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number(), epoch)
     }
@@ -450,7 +441,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, TimeoutVote2<TYPES>, TimeoutCertif
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number() + 1, epoch)
     }
@@ -469,7 +460,7 @@ impl<TYPES: NodeType>
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.date().round + self.date().relay, epoch)
     }
@@ -488,7 +479,7 @@ impl<TYPES: NodeType>
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.date().round + self.date().relay, epoch)
     }
@@ -507,7 +498,7 @@ impl<TYPES: NodeType>
     fn leader(
         &self,
         membership: &TYPES::Membership,
-        epoch: Option<TYPES::Epoch>,
+        epoch: TYPES::Epoch,
     ) -> Result<TYPES::SignatureKey> {
         membership.leader(self.date().round + self.date().relay, epoch)
     }
@@ -555,12 +546,7 @@ impl<TYPES: NodeType, V: Versions>
     ) -> Result<Option<NextEpochQuorumCertificate2<TYPES>>> {
         match event.as_ref() {
             HotShotEvent::QuorumVoteRecv(vote) => {
-                // #3967 REVIEW NOTE: Should we error if self.epoch is None?
-                let next_epoch = self
-                    .epoch
-                    .map(|x| x + 1)
-                    .ok_or_else(|| error!("epoch should not be none in handle_vote_event"))?;
-                self.accumulate_vote(&vote.clone().into(), Some(next_epoch), sender)
+                self.accumulate_vote(&vote.clone().into(), self.epoch + 1, sender)
                     .await
             }
             _ => Ok(None),

@@ -12,11 +12,11 @@ use chrono::Utc;
 use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare},
+    data::{Leaf2, QuorumProposal2, VidDisperseShare2},
     drb::{compute_drb_result, DrbResult},
-    event::{Event, EventType},
-    message::{convert_proposal, Proposal, UpgradeLock},
-    simple_vote::{HasEpoch, QuorumData2, QuorumVote2},
+    event::{Event, EventType, LeafInfo},
+    message::{Proposal, UpgradeLock},
+    simple_vote::{QuorumData2, QuorumVote2},
     traits::{
         block_contents::BlockHeader,
         election::Membership,
@@ -25,10 +25,7 @@ use hotshot_types::{
         storage::Storage,
         ValidatedState,
     },
-    utils::{
-        epoch_from_block_number, is_epoch_root, is_last_block_in_epoch,
-        option_epoch_from_block_number,
-    },
+    utils::{epoch_from_block_number, is_epoch_root, is_last_block_in_epoch},
     vote::HasViewNumber,
 };
 use tokio::spawn;
@@ -45,6 +42,53 @@ use crate::{
     },
     quorum_vote::Versions,
 };
+
+/// Store the DRB result from the quorum proposal.
+///
+/// Returns an error if receiving an inconsistent result.
+async fn store_received_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+    epoch_number: TYPES::Epoch,
+    drb_result: DrbResult,
+    task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
+) -> Result<()> {
+    let mut exist = false;
+    if let Some(stored_result) = task_state
+        .consensus
+        .read()
+        .await
+        .drb_seeds_and_results
+        .results
+        .get(&epoch_number)
+    {
+        if drb_result == *stored_result {
+            return Ok(());
+        }
+        exist = true;
+    }
+
+    // If there exists an inconsistent result, remove it.
+    if exist {
+        task_state
+            .consensus
+            .write()
+            .await
+            .drb_seeds_and_results
+            .results
+            .remove(&epoch_number);
+        bail!("Inconsistent result with the storage.");
+    }
+    // Otherwise, store the result.
+    else {
+        task_state
+            .consensus
+            .write()
+            .await
+            .drb_seeds_and_results
+            .results
+            .insert(epoch_number, drb_result);
+        Ok(())
+    }
+}
 
 /// Store the DRB result from the computation task to the shared `results` table.
 ///
@@ -103,13 +147,13 @@ async fn store_and_get_computed_drb_result<
 ///
 /// Returns an error if we should not vote.
 async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    proposal: &QuorumProposalWrapper<TYPES>,
+    proposal: &QuorumProposal2<TYPES>,
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
 ) -> Result<()> {
     // Skip if this is not the expected block.
     if task_state.epoch_height == 0
         || !is_last_block_in_epoch(
-            proposal.block_header().block_number(),
+            proposal.block_header.block_number(),
             task_state.epoch_height,
         )
     {
@@ -117,40 +161,34 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
         return Ok(());
     }
 
-    // #3967 REVIEW NOTE: Check if this is the right way to decide if we're doing epochs
-    // Alternatively, should we just return Err() if epochs aren't happening here? Or can we assume
-    // that epochs are definitely happening by virtue of getting here?
-    let epoch = option_epoch_from_block_number::<TYPES>(
-        task_state
-            .upgrade_lock
-            .epochs_enabled(proposal.view_number())
-            .await,
-        proposal.block_header().block_number(),
+    let epoch = TYPES::Epoch::new(epoch_from_block_number(
+        proposal.block_header.block_number(),
         task_state.epoch_height,
-    );
+    ));
 
     let proposal_result = proposal
-        .next_drb_result()
+        .next_drb_result
         .context(info!("Proposal is missing the DRB result."))?;
 
     let membership_reader = task_state.membership.read().await;
 
-    if let Some(epoch_val) = epoch {
-        let has_stake_current_epoch =
-            membership_reader.has_stake(&task_state.public_key, Some(epoch_val));
+    let has_stake_current_epoch = membership_reader.has_stake(&task_state.public_key, epoch);
+    let has_stake_next_epoch = membership_reader.has_stake(&task_state.public_key, epoch + 1);
 
-        drop(membership_reader);
+    drop(membership_reader);
 
-        if has_stake_current_epoch {
-            let computed_result =
-                store_and_get_computed_drb_result(epoch_val + 1, task_state).await?;
+    if has_stake_current_epoch {
+        let computed_result = store_and_get_computed_drb_result(epoch + 1, task_state).await?;
 
-            ensure!(proposal_result == computed_result, warn!("Our calculated DRB result is {:?}, which does not match the proposed DRB result of {:?}", computed_result, proposal_result));
-        }
+        ensure!(proposal_result == computed_result, warn!("Our calculated DRB result is {:?}, which does not match the proposed DRB result of {:?}", computed_result, proposal_result));
 
         Ok(())
+    } else if has_stake_next_epoch {
+        store_received_drb_result(epoch + 1, proposal_result, task_state).await
     } else {
-        Err(error!("Epochs are not available"))
+        Err(error!(
+            "We are not participating in either the current or next epoch"
+        ))
     }
 }
 
@@ -158,16 +196,11 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
 ///
 /// Uses the seed previously stored in `store_drb_seed_and_result`.
 async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    proposal: &QuorumProposalWrapper<TYPES>,
+    proposal: &QuorumProposal2<TYPES>,
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
 ) {
-    // #3967 REVIEW NOTE: Should we just exit early if we aren't doing epochs?
-    if proposal.epoch().is_none() {
-        return;
-    }
-
     let current_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
-        proposal.block_header().block_number(),
+        proposal.block_header.block_number(),
         task_state.epoch_height,
     ));
 
@@ -176,7 +209,7 @@ async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versio
         .membership
         .read()
         .await
-        .has_stake(&task_state.public_key, Some(current_epoch_number))
+        .has_stake(&task_state.public_key, current_epoch_number)
     {
         let new_epoch_number = current_epoch_number + 1;
 
@@ -233,41 +266,40 @@ async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versio
     }
 }
 
-/// Store the DRB seed two epochs in advance and the computed or received DRB result for next
-/// epoch.
+/// Store the DRB seed two epochs in advance and the computed DRB result for next epoch.
 ///
-/// We store a combination of the following data.
-/// * The DRB seed two epochs in advance, if the third from the last block, i.e., the epoch root,
-///     is decided and we are in the quorum committee of the next epoch.
-/// * The computed result for the next epoch, if the third from the last block is decided.
-/// * The received result for the next epoch, if the last block of the epoch is decided and we are
-///     in the quorum committee of the committee of the next epoch.
+/// We store the DRB seed and result if the decided block is the third from the last block in the
+/// current epoch and for the former, if we are in the quorum committee of the next epoch.
 ///
 /// Special cases:
 /// * Epoch 0: No DRB computation since we'll transition to epoch 1 immediately.
 /// * Epoch 1 and 2: No computed DRB result since when we first start the computation in epoch 1,
-///     the result is for epoch 3.
+///   the result is for epoch 3.
 ///
-/// We don't need to handle the special cases explicitly here, because the first leaf with which
-/// we'll start the DRB computation is for epoch 3.
+/// We don't need to handle the special cases explicitly here, because the first proposal with
+/// which we'll start the DRB computation is for epoch 3.
 async fn store_drb_seed_and_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+    proposal: &QuorumProposal2<TYPES>,
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
-    decided_leaf: &Leaf2<TYPES>,
+    leaf_views: &[LeafInfo<TYPES>],
 ) -> Result<()> {
-    if task_state.epoch_height == 0 {
-        tracing::info!("Epoch height is 0, skipping DRB storage.");
-        return Ok(());
-    }
+    // This is never none if we've reached a new decide, so this is safe to unwrap.
+    let decided_block_number = leaf_views
+        .last()
+        .unwrap()
+        .leaf
+        .block_header()
+        .block_number();
 
-    let decided_block_number = decided_leaf.block_header().block_number();
-    let current_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
-        decided_block_number,
-        task_state.epoch_height,
-    ));
-
-    // Skip storing the seed and computed result if this is not the epoch root.
-    if is_epoch_root(decided_block_number, task_state.epoch_height) {
+    // Skip if this is not the expected block.
+    if task_state.epoch_height != 0 && is_epoch_root(decided_block_number, task_state.epoch_height)
+    {
         // Cancel old DRB computation tasks.
+        let current_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
+            decided_block_number,
+            task_state.epoch_height,
+        ));
+
         let mut consensus_writer = task_state.consensus.write().await;
         consensus_writer
             .drb_seeds_and_results
@@ -278,48 +310,41 @@ async fn store_drb_seed_and_result<TYPES: NodeType, I: NodeImplementation<TYPES>
         // include in the proposal in the last block of this epoch.
         store_and_get_computed_drb_result(current_epoch_number + 1, task_state).await?;
 
-        // Store the DRB seed input for the epoch after the next one.
-        let Ok(drb_seed_input_vec) = bincode::serialize(&decided_leaf.justify_qc().signatures)
-        else {
-            bail!("Failed to serialize the QC signature.");
-        };
-        let Ok(drb_seed_input) = drb_seed_input_vec.try_into() else {
-            bail!("Failed to convert the serialized QC signature into a DRB seed input.");
-        };
-        task_state
-            .consensus
-            .write()
+        // Skip if we are not in the committee of the next epoch.
+        if task_state
+            .membership
+            .read()
             .await
-            .drb_seeds_and_results
-            .store_seed(current_epoch_number + 2, drb_seed_input);
-    }
-    // Skip storing the received result if this is not the last block.
-    else if is_last_block_in_epoch(decided_block_number, task_state.epoch_height) {
-        if let Some(result) = decided_leaf.next_drb_result {
-            // We don't need to check value existence and consistency because it should be
-            // impossible to decide on a block with different DRB results.
+            .has_stake(&task_state.public_key, current_epoch_number + 1)
+        {
+            let new_epoch_number = current_epoch_number + 2;
+            let Ok(drb_seed_input_vec) = bincode::serialize(&proposal.justify_qc.signatures) else {
+                bail!("Failed to serialize the QC signature.");
+            };
+            let Ok(drb_seed_input) = drb_seed_input_vec.try_into() else {
+                bail!("Failed to convert the serialized QC signature into a DRB seed input.");
+            };
+
+            // Store the DRB seed input for the epoch after the next one.
             task_state
                 .consensus
                 .write()
                 .await
                 .drb_seeds_and_results
-                .results
-                .insert(current_epoch_number + 1, result);
-        } else {
-            bail!("The last block of the epoch is decided but doesn't contain a DRB result.");
+                .store_seed(new_epoch_number, drb_seed_input);
         }
     }
     Ok(())
 }
 
 /// Handles the `QuorumProposalValidated` event.
-#[instrument(skip_all, fields(id = task_state.id, view = *proposal.view_number()))]
+#[instrument(skip_all, fields(view = *proposal.view_number))]
 pub(crate) async fn handle_quorum_proposal_validated<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
     V: Versions,
 >(
-    proposal: &QuorumProposalWrapper<TYPES>,
+    proposal: &QuorumProposal2<TYPES>,
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
 ) -> Result<()> {
     let version = task_state
@@ -435,9 +460,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         tracing::debug!("Successfully sent decide event");
 
         if version >= V::Epochs::VERSION {
-            // `leaf_views.last()` is never none if we've reached a new decide, so this is safe to
-            // unwrap.
-            store_drb_seed_and_result(task_state, &leaf_views.last().unwrap().leaf).await?;
+            store_drb_seed_and_result(proposal, task_state, &leaf_views).await?;
         }
     }
 
@@ -463,7 +486,7 @@ pub(crate) async fn update_shared_state<
     instance_state: Arc<TYPES::InstanceState>,
     storage: Arc<RwLock<I::Storage>>,
     proposed_leaf: &Leaf2<TYPES>,
-    vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
+    vid_share: &Proposal<TYPES, VidDisperseShare2<TYPES>>,
     parent_view_number: Option<TYPES::View>,
     epoch_height: u64,
 ) -> Result<()> {
@@ -537,7 +560,7 @@ pub(crate) async fn update_shared_state<
             &instance_state,
             &parent,
             &proposed_leaf.block_header().clone(),
-            vid_share.data.vid_common_ref().clone(),
+            vid_share.data.common.clone(),
             version,
             *view_number,
         )
@@ -588,23 +611,21 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     view_number: TYPES::View,
     storage: Arc<RwLock<I::Storage>>,
     leaf: Leaf2<TYPES>,
-    vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
+    vid_share: Proposal<TYPES, VidDisperseShare2<TYPES>>,
     extended_vote: bool,
     epoch_height: u64,
 ) -> Result<()> {
-    let epoch_number = option_epoch_from_block_number::<TYPES>(
-        leaf.with_epoch,
+    let epoch_number = TYPES::Epoch::new(epoch_from_block_number(
         leaf.block_header().block_number(),
         epoch_height,
-    );
+    ));
 
     let membership_reader = membership.read().await;
     let committee_member_in_current_epoch = membership_reader.has_stake(&public_key, epoch_number);
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee
     // in the next epoch, the node should vote to achieve the double quorum.
-    let committee_member_in_next_epoch = leaf.with_epoch
-        && is_last_block_in_epoch(leaf.height(), epoch_height)
-        && membership_reader.has_stake(&public_key, epoch_number.map(|x| x + 1));
+    let committee_member_in_next_epoch = is_last_block_in_epoch(leaf.height(), epoch_height)
+        && membership_reader.has_stake(&public_key, epoch_number + 1);
     drop(membership_reader);
 
     ensure!(
@@ -633,7 +654,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     storage
         .write()
         .await
-        .append_vid2(&convert_proposal(vid_share))
+        .append_vid2(&vid_share)
         .await
         .wrap()
         .context(error!("Failed to store VID share"))?;
