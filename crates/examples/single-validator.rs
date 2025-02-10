@@ -42,7 +42,6 @@ use libp2p_networking::network::{
     GossipConfig, RequestResponseConfig,
 };
 use lru::LruCache;
-use rand::Rng;
 use tracing::info;
 use url::Url;
 
@@ -70,6 +69,10 @@ struct Args {
     /// The port to use for Libp2p
     #[arg(long, default_value_t = 3000)]
     libp2p_port: u16,
+
+    /// The port to use for exposing RPC
+    #[arg(long, default_value_t = 5000)]
+    rpc_port: u16,
 
     /// The number of nodes in the network. This needs to be the same between all nodes
     #[arg(long, default_value_t = 5)]
@@ -279,6 +282,7 @@ async fn main() -> Result<()> {
                 hotshot_initializer,
                 args.total_num_nodes,
                 builder_url,
+                args.rpc_port,
                 args.num_transactions_per_view,
                 args.transaction_size,
                 args.num_views,
@@ -310,6 +314,7 @@ async fn main() -> Result<()> {
                 hotshot_initializer,
                 args.total_num_nodes,
                 builder_url,
+                args.rpc_port,
                 args.num_transactions_per_view,
                 args.transaction_size,
                 args.num_views,
@@ -343,6 +348,7 @@ async fn main() -> Result<()> {
                 hotshot_initializer,
                 args.total_num_nodes,
                 builder_url,
+                args.rpc_port,
                 args.num_transactions_per_view,
                 args.transaction_size,
                 args.num_views,

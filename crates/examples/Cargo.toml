@@ -33,6 +33,7 @@ reqwest.workspace = true
 bytes = "1"
 parking_lot.workspace = true
 local-ip-address = "0.6"
+serde_json.workspace = true
 simple_moving_average = "1"
 bytesize = "1"
 

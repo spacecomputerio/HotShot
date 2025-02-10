@@ -40,7 +40,6 @@ use libp2p_networking::network::{
     GossipConfig, RequestResponseConfig,
 };
 use lru::LruCache;
-use rand::Rng;
 use tokio::{spawn, sync::OnceCell};
 use tracing::info;
 use url::Url;
@@ -75,6 +74,10 @@ struct Args {
     /// "combined", "cdn", or "libp2p"
     #[arg(long, default_value = "combined")]
     network: String,
+
+    /// The port to use for exposing RPC
+    #[arg(long, default_value_t = 5000)]
+    rpc_port: u16,
 }
 
 /// Generate a Libp2p multiaddress from a port
@@ -305,6 +308,7 @@ async fn main() -> Result<()> {
                         hotshot_initializer,
                         args.total_num_nodes,
                         builder_url.clone(),
+                        args.rpc_port,
                         args.num_transactions_per_view,
                         args.transaction_size,
                         args.num_views,
@@ -336,6 +340,7 @@ async fn main() -> Result<()> {
                         hotshot_initializer,
                         args.total_num_nodes,
                         builder_url.clone(),
+                        args.rpc_port,
                         args.num_transactions_per_view,
                         args.transaction_size,
                         args.num_views,
@@ -368,6 +373,7 @@ async fn main() -> Result<()> {
                         hotshot_initializer,
                         args.total_num_nodes,
                         builder_url.clone(),
+                        args.rpc_port,
                         args.num_transactions_per_view,
                         args.transaction_size,
                         args.num_views,

@@ -2948,6 +2948,7 @@ dependencies = [
  "portpicker",
  "rand 0.8.5",
  "reqwest",
+ "serde_json",
  "sha2 0.10.8",
  "simple_moving_average",
  "tokio",
