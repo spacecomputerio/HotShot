@@ -1,0 +1,32 @@
+# This file is used to run all components of the multi-process examples (in libp2p network mode). 
+# If you want to just run them all in one process, you can use `cargo run --example all`.
+
+# To run this, do `process-compose -f libp2p.process-compose.yaml up`
+
+# NOTE: You will need Docker installed to run this, as we use KeyDB as a database for the CDN for now
+
+version: "3"
+
+processes:
+  # The coordinator is used to assign unique indices to nodes when running benchmarks on multiple machines
+  # (or in this case, multiple processes). It is also used to share Libp2p addresses with other nodes
+  # so they can bootstrap to each other.
+  coordinator:
+    command: RUST_LOG=info cargo run --example coordinator
+    readiness_probe:
+      exec:
+        command: nc -zv localhost 3030
+      period_seconds: 5
+      timeout_seconds: 4
+      failure_threshold: 20
+
+  hotshot:
+    command: RUST_LOG=info,libp2p=off cargo run --example single-validator -- --network libp2p --libp2p-port 300{{.PC_REPLICA_NUM}} --total-num-nodes 5 --num-da-nodes 3
+    replicas: 5
+    depends_on:
+      coordinator:
+        condition: process_healthy
+    log_location: ./hotshot-{PC_REPLICA_NUM}.log
+    log_configuration:
+      rotation:
+        max_size_mb: 1000
