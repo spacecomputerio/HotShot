@@ -7,7 +7,6 @@ use hotshot_types::{
 use simple_moving_average::SingleSumSMA;
 use simple_moving_average::SMA;
 
-// Include some common code
 include!("rpc.rs");
 
 /// The type of network to use for the example
