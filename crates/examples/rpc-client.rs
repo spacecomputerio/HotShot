@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use rand::Rng as _;
 use std::{
     net::SocketAddr,
     sync::{atomic::AtomicU64, Arc},
@@ -20,8 +21,13 @@ struct Args {
     rpc_url: String,
 
     /// The rate of transactions per second to send
-    #[arg(long, default_value = "100")]
+    #[arg(long, default_value = "2")]
     tps: u64,
+
+    /// The size of each transaction in bytes
+    /// The transaction will be filled with random bytes
+    #[arg(long, default_value = "1024")]
+    tx_size: u64,
 
     /// The number of transactions to send
     /// If not specified, the client will run indefinitely
@@ -44,14 +50,18 @@ async fn main() -> Result<()> {
         .parse::<SocketAddr>()
         .with_context(|| "Failed to parse RPC URL")?;
 
+    // wait for the server to start
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
     // every 1s, send a batch of `tps` transactions made of random bytes
     // if `total_txs` is defined, stop after sending the specified number of transactions
     // otherwise, run indefinitely
     let total_txs = args.total_txs.unwrap_or(0);
     let tps = args.tps;
+    let tx_size = args.tx_size as usize;
     let txs_sent = Arc::new(AtomicU64::new(0));
     loop {
-        tokio::spawn(send_txs(rpc_url, tps, total_txs, Arc::clone(&txs_sent)));
+        tokio::spawn(send_txs(rpc_url, tps, tx_size, total_txs, Arc::clone(&txs_sent)));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -70,12 +80,15 @@ async fn main() -> Result<()> {
 async fn send_txs(
     rpc_url: SocketAddr,
     tps: u64,
+    tx_size: usize,
     total_txs: u64,
     txs_sent: Arc<AtomicU64>,
 ) -> Result<()> {
     let mut txs = Vec::new();
     for _ in 0..tps {
-        txs.push(rand::random::<[u8; 32]>().to_vec());
+        let mut transaction_bytes = vec![0u8; tx_size];
+        rand::thread_rng().fill(&mut transaction_bytes[..]);
+        txs.push(transaction_bytes);
     }
 
     let client = reqwest::Client::new();
