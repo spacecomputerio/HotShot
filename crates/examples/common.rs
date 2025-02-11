@@ -260,9 +260,23 @@ async fn start_consensus<
     // * send_txs - accepts a single arg 'txs' (Vec<Vec<u8>>)
     let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel(100);
     let rpc_addr = format!(":{rpc_port}",);
-    let listener = TcpListener::bind(&rpc_addr).await?;
-    tracing::info!("RPC Listening on: {}", &rpc_addr);
-    println!("RPC Listening on: {}", &rpc_addr);
+    tracing::debug!("Starting RPC on: {}", &rpc_addr);
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(&rpc_addr).await.expect("Failed to bind to RPC address");
+        tracing::info!("RPC Listening on: {}", &rpc_addr);
+        loop {
+            match listener.accept().await {
+                Ok((stream, addr)) => {
+                    tracing::info!("New RPC connection from: {}", addr.to_string());
+                    tokio::spawn(handle_rpc_connection(stream, tx_send.clone()));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to accept RPC connection: {:?}", e);
+                }
+            }
+        }
+    });
+
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
         // Get the event stream for this particular node
@@ -271,12 +285,6 @@ async fn start_consensus<
         // Wait for a `Decide` event for the view number we requested
         loop {
             tokio::select! {
-                // Wait for a new connection
-                Ok((stream, addr)) = listener.accept() => {
-                    tracing::info!("New RPC connection from: {}", addr.to_string());
-                    // Spawn a new task to handle the connection
-                    tokio::spawn(handle_rpc_connection(stream, tx_send.clone()));
-                }
                 Some(tx) = tx_recv.recv() => {
                     // take the first transaction_size bytes of the transaction
                     let tx_bytes = tx[0..transaction_size].to_vec();
