@@ -1,13 +1,14 @@
 use std::time::Instant;
 
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
-
 use async_lock::RwLock;
 use hotshot_types::{
     data::EpochNumber, traits::node_implementation::ConsensusTime, utils::non_crypto_hash,
 };
 use simple_moving_average::SingleSumSMA;
 use simple_moving_average::SMA;
+
+// Include some common code
+include!("rpc.rs");
 
 /// The type of network to use for the example
 #[derive(Debug, PartialEq, Eq)]
@@ -259,22 +260,8 @@ async fn start_consensus<
     // Start a new tokio tcp listener that acts as RPC server, exposing the following functions:
     // * send_txs - accepts a single arg 'txs' (Vec<Vec<u8>>)
     let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel(100);
-    let rpc_addr = format!("0.0.0.0:{rpc_port}",);
-    tracing::debug!("Starting RPC on: {}", &rpc_addr);
     tokio::spawn(async move {
-        let listener = TcpListener::bind(&rpc_addr).await.expect("Failed to bind to RPC address");
-        tracing::info!("RPC Listening on: {}", &rpc_addr);
-        loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    tracing::info!("New RPC connection from: {}", addr.to_string());
-                    tokio::spawn(handle_rpc_connection(stream, tx_send.clone()));
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to accept RPC connection: {:?}", e);
-                }
-            }
-        }
+        start_rpc(rpc_port, tx_send.clone()).await.expect("Failed to start RPC server");
     });
 
     // Spawn the task to wait for events
@@ -419,58 +406,4 @@ async fn start_consensus<
     });
 
     Ok(join_handle)
-}
-
-/// handles a new RPC connection:
-/// * 'send_txs' - accepts multiple txs and sends them over to the main event loop
-async fn handle_rpc_connection(
-    mut stream: TcpStream,
-    tx_send: tokio::sync::mpsc::Sender<Vec<u8>>,
-) -> Result<()> {
-    // Read the request
-    let mut buf = [0; 1024];
-    let n = stream.read(&mut buf).await?;
-    let request = std::str::from_utf8(&buf[..n])?;
-    let request = request.trim();
-
-    // Parse the request
-    let request: serde_json::Value = serde_json::from_str(request)?;
-
-    // Handle the request
-    let response = match request["method"].as_str() {
-        Some("send_txs") => {
-            // Get the transactions
-            let txs = request["params"]["txs"]
-                .as_array()
-                .ok_or_else(|| anyhow::anyhow!("Invalid request"))?;
-            let txs_bytes = txs
-                .iter()
-                .map(|tx| {
-                    let tx = tx.as_str().ok_or_else(|| anyhow::anyhow!("Invalid request"))?;
-                    Ok(tx.as_bytes().to_vec())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            // Send the transactions
-            for tx in txs_bytes {
-                tx_send.send(tx).await?;
-            }
-
-            // Respond with success
-            serde_json::json!({
-                "result": "success"
-            })
-        }
-        _ => {
-            // Respond with error
-            serde_json::json!({
-                "error": "Invalid method"
-            })
-        }
-    };
-
-    // Write the response
-    let response = serde_json::to_string(&response)?;
-    stream.write_all(response.as_bytes()).await?;
-
-    Ok(())
 }

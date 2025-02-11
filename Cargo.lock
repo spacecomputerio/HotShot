@@ -2948,6 +2948,8 @@ dependencies = [
  "portpicker",
  "rand 0.8.5",
  "reqwest",
+ "serde",
+ "serde_derive",
  "serde_json",
  "sha2 0.10.8",
  "simple_moving_average",
