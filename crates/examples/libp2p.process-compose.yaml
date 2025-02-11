@@ -21,7 +21,7 @@ processes:
       failure_threshold: 20
 
   hotshot:
-    command: RUST_LOG=info,libp2p=off cargo run --example single-validator -- --network libp2p --libp2p-port 300{{.PC_REPLICA_NUM}} --total-num-nodes 5 --num-da-nodes 3
+    command: RUST_LOG=info,libp2p=off cargo run --example single-validator -- --network libp2p --libp2p-port 300{{.PC_REPLICA_NUM}} --total-num-nodes 5 --num-da-nodes 3 --rpc-port 500{{.PC_REPLICA_NUM}}
     replicas: 5
     depends_on:
       coordinator:
