@@ -227,6 +227,8 @@ async fn main() -> Result<()> {
     )
     .with_context(|| "Failed to parse builder URL")?;
 
+    tracing::info!("Using builder URL: {}", builder_url);
+
     // Create the known nodes up to the total number of nodes
     let known_nodes: Vec<_> = (0..args.total_num_nodes)
         .map(peer_info_from_index)
@@ -303,6 +305,8 @@ async fn main() -> Result<()> {
             )
             .await
             .with_context(|| "Failed to create libp2p network")?;
+
+            tracing::info!("Libp2p network created");
 
             // Start consensus
             let join_handle = start_consensus::<Libp2pImpl>(

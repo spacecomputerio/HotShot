@@ -95,6 +95,8 @@ async fn new_libp2p_network(
     )
     .expect("Failed to sign DHT lookup record");
 
+    tracing::debug!("Signed lookup record value");
+
     // Configure Libp2p
     let libp2p_config = Libp2pConfig {
         keypair: libp2p_keypair,
@@ -230,8 +232,12 @@ async fn start_consensus<
     // Start it
     builder_handle.start(Box::new(handle.event_stream()));
 
+    tracing::debug!("Builder started");
+
     // Start consensus
     handle.hotshot.start_consensus().await;
+
+    tracing::debug!("Consensus started");
 
     // See if we're a DA node or not
     let is_da_node = memberships.has_da_stake(&public_key, EpochNumber::new(0));

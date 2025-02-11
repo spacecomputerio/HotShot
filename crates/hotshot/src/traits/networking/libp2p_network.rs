@@ -72,7 +72,7 @@ use tokio::{
     },
     time::sleep,
 };
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::BroadcastDelay;
 
@@ -462,6 +462,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
         let (mut rx, network_handle) = spawn_network_node::<T>(config.clone())
             .await
             .with_context(|| "failed to spawn network node")?;
+
+        debug!("Spawned network node");
 
         // Subscribe only to the global topic (DA messages are direct-broadcasted)
         let subscribed_topics = HashSet::from_iter(vec![GLOBAL_TOPIC.to_string()]);
