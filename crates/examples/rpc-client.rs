@@ -84,11 +84,11 @@ async fn send_txs(
     total_txs: u64,
     txs_sent: Arc<AtomicU64>,
 ) -> Result<()> {
-    let mut txs = Vec::new();
+    let mut txs: Vec<String> = Vec::new();
     for _ in 0..tps {
         let mut transaction_bytes = vec![0u8; tx_size];
         rand::thread_rng().fill(&mut transaction_bytes[..]);
-        txs.push(transaction_bytes);
+        txs.push(hex::encode(transaction_bytes));
     }
 
     let client = reqwest::Client::new();

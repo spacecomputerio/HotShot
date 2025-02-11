@@ -2936,6 +2936,7 @@ dependencies = [
  "cdn-marshal",
  "clap",
  "futures",
+ "hex",
  "hotshot",
  "hotshot-example-types",
  "hotshot-testing",
