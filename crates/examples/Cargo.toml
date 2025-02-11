@@ -59,5 +59,9 @@ path = "coordinator.rs"
 name = "single-validator"
 path = "single-validator.rs"
 
+[[example]]
+name = "rpc-client"
+path = "rpc-client.rs"
+
 [lints]
 workspace = true
