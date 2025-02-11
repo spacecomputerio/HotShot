@@ -30,3 +30,11 @@ processes:
     log_configuration:
       rotation:
         max_size_mb: 1000
+
+  client:
+    command: RUST_LOG=info cargo run --example rpc-client -- --rpc-url 127.0.0.1:500{{.PC_REPLICA_NUM}} --tps 2 --total_txs 200
+    replicas: 5
+    depends_on:
+      coordinator:
+        condition: process_healthy
+    log_location: ./hotshot-client-{PC_REPLICA_NUM}.log
