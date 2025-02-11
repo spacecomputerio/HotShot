@@ -256,6 +256,7 @@ async fn start_consensus<
     let rpc_addr = format!(":{rpc_port}",);
     let listener = TcpListener::bind(&rpc_addr).await?;
     tracing::info!("RPC Listening on: {}", &rpc_addr);
+    println!("RPC Listening on: {}", &rpc_addr);
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
         // Get the event stream for this particular node
@@ -265,7 +266,8 @@ async fn start_consensus<
         loop {
             tokio::select! {
                 // Wait for a new connection
-                Ok((stream, _)) = listener.accept() => {
+                Ok((stream, addr)) = listener.accept() => {
+                    tracing::info!("New RPC connection from: {}", addr.to_string());
                     // Spawn a new task to handle the connection
                     tokio::spawn(handle_rpc_connection(stream, tx_send.clone()));
                 }
