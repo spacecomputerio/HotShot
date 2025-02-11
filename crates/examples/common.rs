@@ -259,7 +259,7 @@ async fn start_consensus<
     // Start a new tokio tcp listener that acts as RPC server, exposing the following functions:
     // * send_txs - accepts a single arg 'txs' (Vec<Vec<u8>>)
     let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel(100);
-    let rpc_addr = format!(":{rpc_port}",);
+    let rpc_addr = format!("0.0.0.0:{rpc_port}",);
     tracing::debug!("Starting RPC on: {}", &rpc_addr);
     tokio::spawn(async move {
         let listener = TcpListener::bind(&rpc_addr).await.expect("Failed to bind to RPC address");
