@@ -274,7 +274,12 @@ async fn start_consensus<
             tokio::select! {
                 Some(tx) = tx_recv.recv() => {
                     // take the first transaction_size bytes of the transaction
-                    let tx_bytes = tx[0..transaction_size].to_vec();
+                    let n = if tx.len() < transaction_size {
+                        tx.len()
+                    } else {
+                        transaction_size
+                    };
+                    let tx_bytes = tx[0..n].to_vec();
                     // If we're a DA node, cache the transaction so we can calculate latency
                     if is_da_node {
                         outstanding_transactions
