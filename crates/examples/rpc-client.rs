@@ -57,13 +57,13 @@ async fn main() -> Result<()> {
     // if `total_txs` is defined, stop after sending the specified number of transactions
     // otherwise, run indefinitely
     let total_txs = args.total_txs.unwrap_or(0);
-    let tps = args.tps;
+    let tx_per_sec = args.tps;
     let tx_size = usize::try_from(args.tx_size)?;
     let txs_sent = Arc::new(AtomicU64::new(0));
     loop {
         tokio::spawn(send_txs(
             rpc_url,
-            tps,
+            tx_per_sec,
             tx_size,
             total_txs,
             Arc::clone(&txs_sent),
@@ -111,6 +111,7 @@ async fn send_txs(
         id: txs_sent_value,
     };
 
+    let start_time = std::time::Instant::now();
     tracing::debug!("Sending {tx_per_sec} transactions");
 
     let response = client
@@ -119,6 +120,11 @@ async fn send_txs(
         .send()
         .await
         .with_context(|| "Failed to send RPC request")?;
+
+    tracing::info!(
+        "Got RPC response after {}ms",
+        start_time.elapsed().as_millis()
+    );
 
     let response: RpcResponse = response
         .json()
