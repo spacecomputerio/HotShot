@@ -7,6 +7,8 @@ use hotshot_types::{
 use simple_moving_average::SingleSumSMA;
 use simple_moving_average::SMA;
 
+include!("rpc.rs");
+
 /// The type of network to use for the example
 #[derive(Debug, PartialEq, Eq)]
 enum NetworkType {
@@ -92,6 +94,8 @@ async fn new_libp2p_network(
         private_key,
     )
     .expect("Failed to sign DHT lookup record");
+
+    tracing::debug!("Signed lookup record value");
 
     // Configure Libp2p
     let libp2p_config = Libp2pConfig {
@@ -187,7 +191,8 @@ async fn start_consensus<
     hotshot_initializer: hotshot::HotShotInitializer<TestTypes>,
     total_num_nodes: usize,
     builder_url: Url,
-    num_transactions_per_view: usize,
+    rpc_port: u16,
+    _num_transactions_per_view: usize,
     transaction_size: usize,
     num_views: Option<usize>,
 ) -> Result<tokio::task::JoinHandle<()>> {
@@ -227,8 +232,12 @@ async fn start_consensus<
     // Start it
     builder_handle.start(Box::new(handle.event_stream()));
 
+    tracing::debug!("Builder started");
+
     // Start consensus
     handle.hotshot.start_consensus().await;
+
+    tracing::debug!("Consensus started");
 
     // See if we're a DA node or not
     let is_da_node = memberships.has_da_stake(&public_key, EpochNumber::new(0));
@@ -247,6 +256,13 @@ async fn start_consensus<
     // The last time we decided on a view (for calculating throughput)
     let mut last_decide_time = Instant::now();
 
+    // Start a new tokio tcp listener that acts as RPC server, exposing the following functions:
+    // * send_txs - accepts a single arg 'txs' (Vec<Vec<u8>>)
+    let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel(100);
+    tokio::spawn(async move {
+        start_rpc(rpc_port, tx_send.clone()).await;
+    });
+
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
         // Get the event stream for this particular node
@@ -254,119 +270,139 @@ async fn start_consensus<
 
         // Wait for a `Decide` event for the view number we requested
         loop {
-            // Get the next event
-            let event = event_stream.next().await.unwrap();
-
-            // DA proposals contain the full list of transactions. We can use this to cache
-            // the size of the proposed block
-            if let EventType::DaProposal { proposal, .. } = event.event {
-                // Decode the transactions. We use this to log the size of the proposed block
-                // when we decide on a view
-                let transactions =
-                    match TestTransaction::decode(&proposal.data.encoded_transactions) {
-                        Ok(transactions) => transactions,
-                        Err(err) => {
-                            tracing::error!("Failed to decode transactions: {:?}", err);
-                            continue;
-                        }
-                    };
-
-                // Get the number of transactions in the proposed block
-                let num_transactions = transactions.len();
-
-                // Sum the total number of bytes in the proposed block and cache
-                // the hash so we can calculate latency
-                let mut sum = 0;
-                let mut submitted_times = Vec::new();
-                for transaction in transactions {
-                    // Add the size of the transaction to the sum
-                    sum += transaction.bytes().len();
-
-                    // If we can find the transaction in the cache, add the hash of the transaction to the cache
-                    if let Some(&instant) =
-                        outstanding_transactions.get(&non_crypto_hash(transaction.bytes()))
-                    {
-                        submitted_times.push(instant);
-                    }
-                }
-
-                // Insert the size of the proposed block and the number of transactions into the cache.
-                // We use this to log the size of the proposed block when we decide on a view
-                view_cache.put(
-                    *proposal.data.view_number,
-                    (sum, num_transactions, submitted_times),
-                );
-
-                // A `Decide` event contains data that HotShot has decided on
-            } else if let EventType::Decide { qc, .. } = event.event {
-                // If we cached the size of the proposed block, log it
-                if let Some((block_size, num_transactions, submitted_times)) =
-                    view_cache.get(&*qc.view_number)
-                {
-                    // Calculate the average latency of the transactions
-                    let mut total_latency = Duration::default();
-                    let mut num_found_transactions = 0;
-                    for submitted_time in submitted_times {
-                        total_latency += submitted_time.elapsed();
-                        num_found_transactions += 1;
-                    }
-                    let average_latency = total_latency.checked_div(num_found_transactions);
-
-                    // Update the throughput SMA
-                    throughput
-                        .add_sample(*block_size as f64 / last_decide_time.elapsed().as_secs_f64());
-
-                    // Update the last decided time
-                    last_decide_time = Instant::now();
-
-                    // If we have a valid average latency, log it
-                    if let Some(average_latency) = average_latency {
-                        info!(
-                        block_size = block_size,
-                        num_txs = num_transactions,
-                        avg_tx_latency =? average_latency,
-                        avg_throughput = format!("{}/s", bytesize::ByteSize::b(throughput.get_average() as u64)),
-                        "Decided on view {}",
-                            *qc.view_number
-                        );
+            tokio::select! {
+                Some(tx) = tx_recv.recv() => {
+                    // take the first transaction_size bytes of the transaction
+                    let n = if tx.len() < transaction_size {
+                        tx.len()
                     } else {
-                        info!(
-                            block_size = block_size,
-                            num_txs = num_transactions,
-                            "Decided on view {}",
-                            *qc.view_number
-                        );
-                    }
-                } else {
-                    info!("Decided on view {}", *qc.view_number);
-                }
-
-                // Generate and submit the requested number of transactions
-                for _ in 0..num_transactions_per_view {
-                    // Generate a random transaction
-                    let mut transaction_bytes = vec![0u8; transaction_size];
-                    rand::thread_rng().fill(&mut transaction_bytes[..]);
-
+                        transaction_size
+                    };
+                    let tx_bytes = tx[0..n].to_vec();
                     // If we're a DA node, cache the transaction so we can calculate latency
                     if is_da_node {
                         outstanding_transactions
-                            .put(non_crypto_hash(&transaction_bytes), Instant::now());
+                            .put(non_crypto_hash(&tx_bytes), Instant::now());
                     }
-
-                    // Submit the transaction
-                    if let Err(err) = handle
-                        .submit_transaction(TestTransaction::new(transaction_bytes))
-                        .await
-                    {
+                    if let Err(err) = handle.submit_transaction(TestTransaction::new(tx_bytes)).await {
                         tracing::error!("Failed to submit transaction: {:?}", err);
-                    };
+                    } else {
+                        tracing::info!("Transaction submitted");
+                    }
                 }
+                Some(event) = event_stream.next() => {
+                    // DA proposals contain the full list of transactions. We can use this to cache
+                    // the size of the proposed block
+                    if let EventType::DaProposal { proposal, .. } = event.event {
+                        // Decode the transactions. We use this to log the size of the proposed block
+                        // when we decide on a view
+                        let transactions =
+                            match TestTransaction::decode(&proposal.data.encoded_transactions) {
+                                Ok(transactions) => transactions,
+                                Err(err) => {
+                                    tracing::error!("Failed to decode transactions: {:?}", err);
+                                    continue;
+                                }
+                            };
 
-                // If we have a specific view number we want to wait for, check if we've reached it
-                if let Some(num_views) = num_views {
-                    if *qc.view_number == num_views as u64 {
-                        // Break when we've decided on the view number we requested
-                        break;
+                        // Get the number of transactions in the proposed block
+                        let num_transactions = transactions.len();
+
+                        // Sum the total number of bytes in the proposed block and cache
+                        // the hash so we can calculate latency
+                        let mut sum = 0;
+                        let mut submitted_times = Vec::new();
+                        for transaction in transactions {
+                            // Add the size of the transaction to the sum
+                            sum += transaction.bytes().len();
+
+                            // If we can find the transaction in the cache, add the hash of the transaction to the cache
+                            if let Some(&instant) =
+                                outstanding_transactions.get(&non_crypto_hash(transaction.bytes()))
+                            {
+                                submitted_times.push(instant);
+                            }
+                        }
+
+                        // Insert the size of the proposed block and the number of transactions into the cache.
+                        // We use this to log the size of the proposed block when we decide on a view
+                        view_cache.put(
+                            *proposal.data.view_number,
+                            (sum, num_transactions, submitted_times),
+                        );
+
+                        // A `Decide` event contains data that HotShot has decided on
+                    } else if let EventType::Decide { qc, .. } = event.event {
+                        // If we cached the size of the proposed block, log it
+                        if let Some((block_size, num_transactions, submitted_times)) =
+                            view_cache.get(&*qc.view_number)
+                        {
+                            // Calculate the average latency of the transactions
+                            let mut total_latency = Duration::default();
+                            let mut num_found_transactions = 0;
+                            for submitted_time in submitted_times {
+                                total_latency += submitted_time.elapsed();
+                                num_found_transactions += 1;
+                            }
+                            let average_latency = total_latency.checked_div(num_found_transactions);
+
+                            // Update the throughput SMA
+                            throughput
+                                .add_sample(*block_size as f64 / last_decide_time.elapsed().as_secs_f64());
+
+                            // Update the last decided time
+                            last_decide_time = Instant::now();
+
+                            // If we have a valid average latency, log it
+                            if let Some(average_latency) = average_latency {
+                                info!(
+                                block_size = block_size,
+                                num_txs = num_transactions,
+                                avg_tx_latency =? average_latency,
+                                avg_throughput = format!("{}/s", bytesize::ByteSize::b(throughput.get_average() as u64)),
+                                "Decided on view {}",
+                                    *qc.view_number
+                                );
+                            } else {
+                                info!(
+                                    block_size = block_size,
+                                    num_txs = num_transactions,
+                                    "Decided on view {}",
+                                    *qc.view_number
+                                );
+                            }
+                        } else {
+                            info!("Decided on view {}", *qc.view_number);
+                        }
+
+                        // // Generate and submit the requested number of transactions
+                        // for _ in 0..num_transactions_per_view {
+                        //     // Generate a random transaction
+                        //     let mut transaction_bytes = vec![0u8; transaction_size];
+                        //     rand::thread_rng().fill(&mut transaction_bytes[..]);
+
+                        //     // If we're a DA node, cache the transaction so we can calculate latency
+                        //     if is_da_node {
+                        //         outstanding_transactions
+                        //             .put(non_crypto_hash(&transaction_bytes), Instant::now());
+                        //     }
+
+                        //     // Submit the transaction
+                        //     if let Err(err) = handle
+                        //         .submit_transaction(TestTransaction::new(transaction_bytes))
+                        //         .await
+                        //     {
+                        //         tracing::error!("Failed to submit transaction: {:?}", err);
+                        //     };
+                        // }
+
+                        // If we have a specific view number we want to wait for, check if we've reached it
+                        if let Some(num_views) = num_views {
+                            if *qc.view_number == num_views as u64 {
+                                // Break when we've decided on the view number we requested
+                                break;
+                            }
+                        }
                     }
                 }
             }

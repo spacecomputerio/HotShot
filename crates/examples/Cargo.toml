@@ -33,8 +33,12 @@ reqwest.workspace = true
 bytes = "1"
 parking_lot.workspace = true
 local-ip-address = "0.6"
+serde_json.workspace = true
+serde.workspace = true
 simple_moving_average = "1"
 bytesize = "1"
+serde_derive = "1.0.217"
+hex = "0.4.3"
 
 [[example]]
 name = "all"
@@ -55,6 +59,10 @@ path = "coordinator.rs"
 [[example]]
 name = "single-validator"
 path = "single-validator.rs"
+
+[[example]]
+name = "rpc-client"
+path = "rpc-client.rs"
 
 [lints]
 workspace = true
