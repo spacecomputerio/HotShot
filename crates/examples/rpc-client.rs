@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
     // otherwise, run indefinitely
     let total_txs = args.total_txs.unwrap_or(0);
     let tps = args.tps;
-    let tx_size = args.tx_size as usize;
+    let tx_size = usize::try_from(args.tx_size)?;
     let txs_sent = Arc::new(AtomicU64::new(0));
     loop {
         tokio::spawn(send_txs(rpc_url, tps, tx_size, total_txs, Arc::clone(&txs_sent)));
@@ -77,15 +77,16 @@ async fn main() -> Result<()> {
     }
 }
 
+/// Sends transactions to the RPC server
 async fn send_txs(
     rpc_url: SocketAddr,
-    tps: u64,
+    tx_per_sec: u64,
     tx_size: usize,
     total_txs: u64,
     txs_sent: Arc<AtomicU64>,
 ) -> Result<()> {
     let mut txs: Vec<String> = Vec::new();
-    for _ in 0..tps {
+    for _ in 0..tx_per_sec {
         let mut transaction_bytes = vec![0u8; tx_size];
         rand::thread_rng().fill(&mut transaction_bytes[..]);
         txs.push(hex::encode(transaction_bytes));
@@ -94,7 +95,7 @@ async fn send_txs(
     let client = reqwest::Client::new();
     let txs_sent_value = txs_sent.load(std::sync::atomic::Ordering::SeqCst);
     if total_txs > 0 && txs_sent_value >= total_txs {
-        tracing::debug!("Sent {} transactions, stopping", txs_sent_value);
+        tracing::debug!("Sent {txs_sent_value} transactions, stopping");
         return Ok(());
     }
     let rpc_request = RpcRequest {
@@ -104,10 +105,10 @@ async fn send_txs(
         id: txs_sent_value,
     };
 
-    tracing::debug!("Sending {} transactions", tps);
+    tracing::debug!("Sending {tx_per_sec} transactions");
 
     let response = client
-        .post(format!("http://{}", rpc_url))
+        .post(format!("http://{rpc_url}"))
         .json(&rpc_request)
         .send()
         .await
@@ -120,7 +121,7 @@ async fn send_txs(
 
     tracing::debug!("RPC response: {:?}", response);
 
-    txs_sent.fetch_add(tps, std::sync::atomic::Ordering::SeqCst);
+    txs_sent.fetch_add(tx_per_sec, std::sync::atomic::Ordering::SeqCst);
 
     Ok(())
 }

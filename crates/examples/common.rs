@@ -260,7 +260,7 @@ async fn start_consensus<
     // * send_txs - accepts a single arg 'txs' (Vec<Vec<u8>>)
     let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel(100);
     tokio::spawn(async move {
-        start_rpc(rpc_port, tx_send.clone()).await.expect("Failed to start RPC server");
+        start_rpc(rpc_port, tx_send.clone()).await;
     });
 
     // Spawn the task to wait for events

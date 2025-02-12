@@ -5,23 +5,32 @@ use tokio::sync::mpsc::Sender;
 
 use serde_derive::{Deserialize, Serialize};
 
+/// RPC request structure
 #[derive(Deserialize, Serialize, Debug)]
 struct RpcRequest {
+    /// JSON-RPC version
     jsonrpc: String,
+    /// RPC method
     method: String,
+    /// RPC parameters
     params: serde_json::Value,
+    /// RPC request ID
     id: u64,
 }
 
+/// RPC response structure
 #[derive(Deserialize, Serialize, Debug)]
 struct RpcResponse {
+    /// JSON-RPC version
     jsonrpc: String,
+    /// RPC result
     result: serde_json::Value,
+    /// RPC request ID
     id: u64,
 }
 
-/// Starts the RPC server
-pub async fn start_rpc(rpc_port: u16, tx_send: tokio::sync::mpsc::Sender<Vec<u8>>) -> Result<()> {
+/// Starts the RPC server, returns a future that resolves when the server stops or fails
+pub async fn start_rpc(rpc_port: u16, tx_send: Sender<Vec<u8>>) {
     let tx_send_filter = warp::any().map(move || tx_send.clone());
     
     let jrpc = warp::post()
@@ -33,16 +42,15 @@ pub async fn start_rpc(rpc_port: u16, tx_send: tokio::sync::mpsc::Sender<Vec<u8>
     tracing::debug!("Starting RPC server on: 0.0.0.0:{}", rpc_port);
 
     warp::serve(jrpc).run(([0, 0, 0, 0], rpc_port)).await;
-
-    Ok(())
 }
 
+/// Handles an RPC request
 async fn handle_rpc_request(req: RpcRequest, tx_send: Sender<Vec<u8>>) -> Result<impl warp::Reply, warp::Rejection> {
     match req.method.as_str() {
         "send_txs" => {
             if let Some(txs) = req.params.get("txs").and_then(|v| v.as_array()) {
                 match rpc_send_txs(txs, tx_send).await {
-                    Ok(_) => {
+                    Ok(()) => {
                         let response = RpcResponse {
                             jsonrpc: "2.0".to_string(),
                             result: json!(true),
@@ -68,7 +76,8 @@ async fn handle_rpc_request(req: RpcRequest, tx_send: Sender<Vec<u8>>) -> Result
     }
 }
 
-async fn rpc_send_txs(txs: &Vec<serde_json::Value>, tx_send: Sender<Vec<u8>>) -> Result<()> {
+/// Handles `send_txs` RPC method
+async fn rpc_send_txs(txs: &[serde_json::Value], tx_send: Sender<Vec<u8>>) -> Result<()> {
     let txs_bytes = txs
         .iter()
         .map(|tx| {
