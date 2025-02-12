@@ -61,7 +61,13 @@ async fn main() -> Result<()> {
     let tx_size = usize::try_from(args.tx_size)?;
     let txs_sent = Arc::new(AtomicU64::new(0));
     loop {
-        tokio::spawn(send_txs(rpc_url, tps, tx_size, total_txs, Arc::clone(&txs_sent)));
+        tokio::spawn(send_txs(
+            rpc_url,
+            tps,
+            tx_size,
+            total_txs,
+            Arc::clone(&txs_sent),
+        ));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
