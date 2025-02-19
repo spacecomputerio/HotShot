@@ -17,7 +17,7 @@ use std::{
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::Parser;
-use hotshot::helpers::initialize_logging;
+use hotshot::helpers::initialize_logging_with_file;
 use libp2p::{multiaddr::Protocol, Multiaddr};
 use parking_lot::RwLock;
 use warp::Filter;
@@ -33,7 +33,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    initialize_logging();
+    let _log_guard = initialize_logging_with_file();
 
     // Parse the command-line arguments
     let args = Args::parse();

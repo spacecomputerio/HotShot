@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use futures::StreamExt;
 use hotshot::{
-    helpers::initialize_logging,
+    helpers::initialize_logging_with_file,
     traits::{
         election::static_committee::StaticCommittee,
         implementations::{
@@ -138,7 +138,7 @@ async fn get_public_ip_address(source: &str) -> Result<IpAddr> {
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
     // Initialize logging
-    initialize_logging();
+    let _log_guard = initialize_logging_with_file();
 
     // Parse the command-line arguments
     let args = Args::parse();
