@@ -2,7 +2,6 @@ use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 use tracing_appender::non_blocking::WorkerGuard;
 
-
 /// Initializes logging
 pub fn initialize_logging() {
     // Parse the `RUST_LOG_SPAN_EVENTS` environment variable
@@ -35,7 +34,6 @@ pub fn initialize_logging() {
             .try_init();
     };
 }
-
 
 /// Initializes logging
 pub fn initialize_logging_with_file() -> WorkerGuard {
