@@ -49,7 +49,7 @@ use url::Url;
 include!("common.rs");
 
 /// This example runs a single validator node
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 struct Args {
     /// The coordinator address to connect to. The coordinator is just used to tell other nodes
     /// about the libp2p bootstrap addresses and give each one a unique index
@@ -142,6 +142,8 @@ async fn main() -> Result<()> {
 
     // Parse the command-line arguments
     let args = Args::parse();
+
+    tracing::info!("Starting single-validator with args: {:?}", args);
 
     // Match the network type
     let network_type = match args.network.to_lowercase().as_str() {

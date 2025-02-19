@@ -23,7 +23,7 @@ use parking_lot::RwLock;
 use warp::Filter;
 
 /// The coordinator service, used to assign unique indices to nodes when running benchmarks
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 struct Args {
     /// The address to bind to
     #[arg(long, default_value = "127.0.0.1:3030")]
@@ -37,6 +37,8 @@ async fn main() -> Result<()> {
 
     // Parse the command-line arguments
     let args = Args::parse();
+
+    tracing::info!("Starting coordinator with args: {:?}", args);
 
     // Parse the bind address
     let bind_address = args

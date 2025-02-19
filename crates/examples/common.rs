@@ -287,7 +287,7 @@ async fn start_consensus<
                     if let Err(err) = handle.submit_transaction(TestTransaction::new(tx_bytes)).await {
                         tracing::error!("Failed to submit transaction: {:?}", err);
                     } else {
-                        tracing::info!("Transaction submitted");
+                        tracing::info!("Transaction submitted successfully (size: {n})");
                     }
                 }
                 Some(event) = event_stream.next() => {
@@ -307,7 +307,7 @@ async fn start_consensus<
 
                         // Get the number of transactions in the proposed block
                         let num_transactions = transactions.len();
-
+                        
                         // Sum the total number of bytes in the proposed block and cache
                         // the hash so we can calculate latency
                         let mut sum = 0;
@@ -323,6 +323,8 @@ async fn start_consensus<
                                 submitted_times.push(instant);
                             }
                         }
+                        
+                        info!("Proposed block size: {sum} bytes, num transactions: {num_transactions}");
 
                         // Insert the size of the proposed block and the number of transactions into the cache.
                         // We use this to log the size of the proposed block when we decide on a view

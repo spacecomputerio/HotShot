@@ -14,7 +14,7 @@ use hotshot::helpers::initialize_logging_with_file;
 include!("rpc.rs");
 
 /// The RPC client service, used to dispatch transactions to the RPC server on the validator
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 struct Args {
     /// The rpc url to connect to
     #[arg(long, default_value = "127.0.0.1:5000")]
@@ -43,6 +43,8 @@ async fn main() -> Result<()> {
 
     // Parse the command-line arguments
     let args = Args::parse();
+
+    tracing::info!("Starting rpc-client with args: {:?}", args);
 
     // Parse the RPC URL
     let rpc_url = args
