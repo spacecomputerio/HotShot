@@ -82,6 +82,7 @@ tide-disco = "0.9"
 time = "0.3"
 toml = "0.8"
 tracing = "0.1"
+tracing-appender = "0.2"
 typenum = "1"
 memoize = { version = "0.4", features = ["full"] }
 vbs = "0.1"

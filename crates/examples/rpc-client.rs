@@ -9,7 +9,7 @@ use std::{
     sync::{atomic::AtomicU64, Arc},
 };
 
-use hotshot::helpers::initialize_logging;
+use hotshot::helpers::initialize_logging_with_file;
 
 include!("rpc.rs");
 
@@ -39,7 +39,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    initialize_logging();
+    let _log_guard = initialize_logging_with_file();
 
     // Parse the command-line arguments
     let args = Args::parse();
