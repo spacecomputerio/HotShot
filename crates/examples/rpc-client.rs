@@ -3,19 +3,21 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use rand::Rng as _;
-use std::{
-    net::SocketAddr,
-    sync::{atomic::AtomicU64, Arc},
-};
-
 use hotshot::helpers::initialize_logging_with_file;
+use libp2p::Multiaddr;
+use rand::Rng as _;
+use std::sync::{atomic::AtomicU64, Arc};
 
 include!("rpc.rs");
 
 /// The RPC client service, used to dispatch transactions to the RPC server on the validator
 #[derive(Parser, Debug)]
 struct Args {
+    /// The coordinator to use for working against multiple nodes.
+    /// If set, the client will use the coordinator to get all the available RPCs to connect to.
+    #[arg(long)]
+    coordinator_url: Option<String>,
+
     /// The rpc url to connect to
     #[arg(long, default_value = "127.0.0.1:5000")]
     rpc_url: String,
@@ -46,51 +48,91 @@ async fn main() -> Result<()> {
 
     tracing::info!("Starting rpc-client with args: {:?}", args);
 
-    // Parse the RPC URL
-    let rpc_url = args
-        .rpc_url
-        .parse::<SocketAddr>()
-        .with_context(|| "Failed to parse RPC URL")?;
+    let rpc_urls = if let Some(coorindator_url) = &args.coordinator_url {
+        tracing::info!("Using coordinator at: {}", coorindator_url.clone());
+        // Fetch the known libp2p nodes from the coordinator
+        let p2p_info_url = format!("http://{}/libp2p-info", coorindator_url);
+        let known_ips = reqwest::get(p2p_info_url.as_str())
+            .await?
+            .text()
+            .await?
+            .split('\n')
+            .map(|s| {
+                s.parse::<Multiaddr>()
+                    .with_context(|| "Failed to parse Libp2p bootstrap address")
+                    .unwrap()
+            })
+            .map(|addr| {
+                let components = addr.iter().collect::<Vec<_>>();
+                if components.len() < 2 {
+                    return addr.to_string();
+                }
+                components[0].to_string()
+            })
+            .collect::<Vec<_>>();
+        // Print the known libp2p nodes
+        tracing::info!("Known libp2p nodes: {:?}", known_ips);
 
-    // wait for the server to start
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        let rpc_urls = known_ips
+            .iter()
+            .map(|ip| format!("http://{}:5000", ip.clone()))
+            .collect::<Vec<_>>();
+
+        rpc_urls
+    } else {
+        vec![args.rpc_url.clone()]
+    };
 
     // every 1s, send a batch of `tps` transactions made of random bytes
     // if `total_txs` is defined, stop after sending the specified number of transactions
     // otherwise, run indefinitely
-    let total_txs = args.total_txs.unwrap_or(0);
+    let total_txs = args.total_txs;
     let tx_per_sec = args.tps;
     let tx_size = usize::try_from(args.tx_size)?;
     let txs_sent = Arc::new(AtomicU64::new(0));
+    let mut iterations = 0;
+    let num_rpcs = rpc_urls.len();
+    if num_rpcs == 0 {
+        return Err(anyhow::anyhow!("No RPCs to connect to"));
+    }
     loop {
+        let rpc_url = rpc_urls[get_next_rpc(iterations, num_rpcs)].clone();
+        iterations += 1;
         tokio::spawn(send_txs(
             rpc_url,
             tx_per_sec,
             tx_size,
-            total_txs,
             Arc::clone(&txs_sent),
         ));
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         let txs_sent_value = txs_sent.load(std::sync::atomic::Ordering::SeqCst);
-        if total_txs > 0 && txs_sent_value >= total_txs {
-            tracing::debug!(
-                "Sent {} transactions while limit is {}, stopping",
-                txs_sent_value,
-                total_txs
-            );
-            return Ok(());
+        if let Some(total_txs) = total_txs {
+            if txs_sent_value >= total_txs {
+                tracing::debug!(
+                    "Sent {} transactions while limit is {}, stopping",
+                    txs_sent_value,
+                    total_txs
+                );
+                return Ok(());
+            }
         }
     }
 }
 
+fn get_next_rpc(iterations: u32, rpcs: usize) -> usize {
+    if rpcs == 1 {
+        return 0;
+    }
+    (iterations as usize) % rpcs
+}
+
 /// Sends transactions to the RPC server
 async fn send_txs(
-    rpc_url: SocketAddr,
+    rpc_url: String,
     tx_per_sec: u64,
     tx_size: usize,
-    total_txs: u64,
     txs_sent: Arc<AtomicU64>,
 ) -> Result<()> {
     let mut txs: Vec<String> = Vec::new();
@@ -102,10 +144,6 @@ async fn send_txs(
 
     let client = reqwest::Client::new();
     let txs_sent_value = txs_sent.load(std::sync::atomic::Ordering::SeqCst);
-    if total_txs > 0 && txs_sent_value >= total_txs {
-        tracing::debug!("Sent {txs_sent_value} transactions, stopping");
-        return Ok(());
-    }
     let rpc_request = RpcRequest {
         jsonrpc: "2.0".to_string(),
         method: "send_txs".to_string(),
