@@ -31,10 +31,23 @@ processes:
       rotation:
         max_size_mb: 1000
 
-  client:
-    command: RUST_LOG=info cargo run --example rpc-client -- --rpc-url 127.0.0.1:500{{.PC_REPLICA_NUM}} --tps 2 --total_txs 200
-    replicas: 5
+  testrpc-dry-run:
+    command: RUST_LOG=debug testrpc -f $PWD/hotshot.testrpc.yaml --dry-run
     depends_on:
       coordinator:
         condition: process_healthy
-    log_location: ./hotshot-client-{PC_REPLICA_NUM}.log
+    readiness_probe:
+      exec:
+        command: nc -zv localhost 5000 && nc -zv localhost 5001 && nc -zv localhost 5002 && nc -zv localhost 5003 && nc -zv localhost 5004
+      period_seconds: 5
+      timeout_seconds: 4
+      failure_threshold: 20
+
+  testrpc:
+    command: RUST_LOG=debug testrpc -f $PWD/hotshot.testrpc.yaml
+    depends_on:
+      coordinator:
+        condition: process_healthy
+      testrpc-dry-run:
+        condition: process_healthy
+    log_location: ./hotshot-client-testrpc.log
