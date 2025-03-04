@@ -47,6 +47,14 @@ pub async fn start_rpc(rpc_port: u16, tx_send: Sender<Vec<u8>>) {
 /// Handles an RPC request
 async fn handle_rpc_request(req: RpcRequest, tx_send: Sender<Vec<u8>>) -> Result<impl warp::Reply, warp::Rejection> {
     match req.method.as_str() {
+        "ping" => {
+            let response = RpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: json!("pong"),
+                id: req.id,
+            };
+            Ok(warp::reply::json(&response))
+        }
         "send_txs" => {
             if let Some(txs) = req.params.get("txs").and_then(|v| v.as_array()) {
                 match rpc_send_txs(txs, tx_send).await {
