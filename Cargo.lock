@@ -2948,6 +2948,7 @@ dependencies = [
  "lru 0.12.5",
  "parking_lot",
  "portpicker",
+ "prometheus",
  "rand 0.8.5",
  "reqwest",
  "serde",
