@@ -5,7 +5,7 @@
 //! real builder is in an upstream repo)
 
 use std::{
-    collections::HashMap, net::IpAddr, num::NonZero, str::FromStr, sync::Arc, time::Duration,
+    collections::HashMap, io::Write, net::IpAddr, num::NonZero, str::FromStr, sync::Arc, time::Duration
 };
 
 use anyhow::{Context, Result};
@@ -104,6 +104,12 @@ struct Args {
     /// NOTE: This is only used for the libp2p network
     #[arg(long)]
     metrics_port: Option<u16>,
+
+    /// The file to write metrics to
+    /// If not specified, metrics are not written to a file
+    /// NOTE: This is only used for the libp2p network
+    #[arg(long)]
+    metrics_file: Option<String>,
 }
 
 /// Get the IP address to use based on the source
@@ -337,12 +343,29 @@ async fn main() -> Result<()> {
                 args.num_transactions_per_view,
                 args.transaction_size,
                 args.num_views,
-                met,
+                met.clone(),
             )
             .await?;
 
             // Wait for consensus to finish
             join_handle.await?;
+
+            match m.gather() {
+                Some(collected_metrics) => {
+                    match args.metrics_file {
+                        Some(file) => {
+                            let mut file = std::fs::File::create(file)?;
+                            file.write_all(collected_metrics.as_bytes())?; 
+                        }
+                        None => {
+                            println!("----\nMETRICS----\n{collected_metrics}");
+                        }
+                    }
+                }
+                None => {
+                    tracing::error!("Failed to gather metrics");
+                }
+            }
         }
         NetworkType::Combined => {
             // Create the network

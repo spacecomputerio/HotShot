@@ -194,6 +194,17 @@ impl PrometheusMetrics {
     pub fn get_port(&self) -> Option<u16> {
         self.port
     }
+
+    /// Gather the metrics and return them as a string
+    pub fn gather(&self) -> Option<String> {
+        let encoder = prometheus::TextEncoder::new();
+        let metric_families = self.registry.gather();
+
+        match encoder.encode_to_string(&metric_families) {
+            Ok(raw) => Some(raw),
+            Err(_) => None,
+        }
+    }
 }
 
 impl hsmetrics::Metrics for PrometheusMetrics {
