@@ -81,8 +81,16 @@ use crate::BroadcastDelay;
 pub struct Libp2pMetricsValue {
     /// The number of currently connected peers
     pub num_connected_peers: Box<dyn Gauge>,
+    /// The number of failed (incoming) messages
+    pub num_failed_recv_messages: Box<dyn Counter>,
     /// The number of failed messages
     pub num_failed_messages: Box<dyn Counter>,
+    /// The number of failed messages
+    pub num_not_ready_yet_failed_messages: Box<dyn Counter>,
+    /// The number of failed messages
+    pub num_failed_node_lookups: Box<dyn Counter>,
+    /// The number of failed messages
+    pub num_self_routed_messages: Box<dyn Counter>,
     /// Whether or not the network is considered ready
     pub is_ready: Box<dyn Gauge>,
 }
@@ -96,7 +104,15 @@ impl Libp2pMetricsValue {
         // Create the metrics
         Self {
             num_connected_peers: subgroup.create_gauge("num_connected_peers".into(), None),
+            num_failed_recv_messages: subgroup
+                .create_counter("num_failed_recv_messages".into(), None),
             num_failed_messages: subgroup.create_counter("num_failed_messages".into(), None),
+            num_not_ready_yet_failed_messages: subgroup
+                .create_counter("num_not_ready_yet_failed_messages".into(), None),
+            num_failed_node_lookups: subgroup
+                .create_counter("num_failed_node_lookups".into(), None),
+            num_self_routed_messages: subgroup
+                .create_counter("num_self_routed_messages".into(), None),
             is_ready: subgroup.create_gauge("is_ready".into(), None),
         }
     }
@@ -729,6 +745,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         // If we're not ready, return an error
         if !self.is_ready() {
             self.inner.metrics.num_failed_messages.add(1);
+            self.inner.metrics.num_not_ready_yet_failed_messages.add(1);
             return Err(NetworkError::NotReadyYet);
         };
 
@@ -736,6 +753,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let topic = topic.to_string();
         if self.inner.subscribed_topics.contains(&topic) {
             // Short-circuit-send the message to ourselves
+            self.inner.metrics.num_self_routed_messages.add(1);
             self.inner.sender.try_send(message.clone()).map_err(|_| {
                 self.inner.metrics.num_failed_messages.add(1);
                 NetworkError::ShutDown
@@ -786,6 +804,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         // If we're not ready, return an error
         if !self.is_ready() {
             self.inner.metrics.num_failed_messages.add(1);
+            self.inner.metrics.num_not_ready_yet_failed_messages.add(1);
             return Err(NetworkError::NotReadyYet);
         };
 
@@ -818,11 +837,13 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         // If we're not ready, return an error
         if !self.is_ready() {
             self.inner.metrics.num_failed_messages.add(1);
+            self.inner.metrics.num_not_ready_yet_failed_messages.add(1);
             return Err(NetworkError::NotReadyYet);
         };
 
         // Short circuit if we're trying to message ourselves
         if recipient == self.inner.hotshot_public_key {
+            self.inner.metrics.num_self_routed_messages.add(1);
             // panic if we already shut down?
             self.inner.sender.try_send(message).map_err(|_x| {
                 self.inner.metrics.num_failed_messages.add(1);
@@ -840,6 +861,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             Ok(pid) => pid,
             Err(err) => {
                 self.inner.metrics.num_failed_messages.add(1);
+                self.inner.metrics.num_failed_node_lookups.add(1);
                 return Err(NetworkError::LookupError(format!(
                     "failed to look up node for direct message: {err}"
                 )));
@@ -892,7 +914,10 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             .await
             .recv()
             .await
-            .ok_or(NetworkError::ShutDown)?;
+            .ok_or_else(|| {
+                self.inner.metrics.num_failed_recv_messages.add(1);
+                NetworkError::ShutDown
+            })?;
 
         Ok(result)
     }
