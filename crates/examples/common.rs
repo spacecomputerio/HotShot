@@ -286,7 +286,7 @@ async fn start_consensus<
         start_rpc(rpc_port, tx_send.clone()).await;
     });
 
-    match met {
+    match met.clone() {
         Some(m) => {
             let metrics_cloned = m.clone();
             tokio::spawn(async move {
@@ -304,6 +304,10 @@ async fn start_consensus<
         None => {}
     }
 
+    let metrics_cloned = match met {
+        Some(m) => m.clone(),
+        None => init_metrics(None),
+    };
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
         // Get the event stream for this particular node
@@ -445,6 +449,20 @@ async fn start_consensus<
                                 // Break when we've decided on the view number we requested
                                 break;
                             }
+                        }
+
+                        if *qc.view_number % 100 == 0 {
+                            // print metrics every 100 views
+                            let collected_metrics = metrics_cloned.gather();
+                            match collected_metrics {
+                                Some(metrics) => {
+                                    println!("----\nMETRICS----\n{metrics}");
+                                }
+                                None => {
+                                    info!("No metrics collected");
+                                }
+                            }
+                            break;
                         }
                     }
                 }

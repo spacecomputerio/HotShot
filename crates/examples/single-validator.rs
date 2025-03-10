@@ -5,7 +5,8 @@
 //! real builder is in an upstream repo)
 
 use std::{
-    collections::HashMap, io::Write, net::IpAddr, num::NonZero, str::FromStr, sync::Arc, time::Duration
+    collections::HashMap, io::Write, net::IpAddr, num::NonZero, str::FromStr, sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -351,17 +352,15 @@ async fn main() -> Result<()> {
             join_handle.await?;
 
             match m.gather() {
-                Some(collected_metrics) => {
-                    match args.metrics_file {
-                        Some(file) => {
-                            let mut file = std::fs::File::create(file)?;
-                            file.write_all(collected_metrics.as_bytes())?; 
-                        }
-                        None => {
-                            println!("----\nMETRICS----\n{collected_metrics}");
-                        }
+                Some(collected_metrics) => match args.metrics_file {
+                    Some(file) => {
+                        let mut file = std::fs::File::create(file)?;
+                        file.write_all(collected_metrics.as_bytes())?;
                     }
-                }
+                    None => {
+                        println!("----\nMETRICS----\n{collected_metrics}");
+                    }
+                },
                 None => {
                     tracing::error!("Failed to gather metrics");
                 }
