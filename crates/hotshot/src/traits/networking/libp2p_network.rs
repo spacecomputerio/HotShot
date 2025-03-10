@@ -104,14 +104,15 @@ impl Libp2pMetricsValue {
         // Create the metrics
         Self {
             num_connected_peers: subgroup.create_gauge("num_connected_peers".into(), None),
-            num_failed_recv_messages: subgroup.create_counter("num_failed_recv_messages".into(), None),
+            num_failed_recv_messages: subgroup
+                .create_counter("num_failed_recv_messages".into(), None),
             num_failed_messages: subgroup.create_counter("num_failed_messages".into(), None),
-            num_not_ready_yet_failed_messages: subgroup.create_counter(
-                "num_not_ready_yet_failed_messages".into(),
-                None,
-            ),
-            num_failed_node_lookups: subgroup.create_counter("num_failed_node_lookups".into(), None),
-            num_self_routed_messages: subgroup.create_counter("num_self_routed_messages".into(), None),
+            num_not_ready_yet_failed_messages: subgroup
+                .create_counter("num_not_ready_yet_failed_messages".into(), None),
+            num_failed_node_lookups: subgroup
+                .create_counter("num_failed_node_lookups".into(), None),
+            num_self_routed_messages: subgroup
+                .create_counter("num_self_routed_messages".into(), None),
             is_ready: subgroup.create_gauge("is_ready".into(), None),
         }
     }
