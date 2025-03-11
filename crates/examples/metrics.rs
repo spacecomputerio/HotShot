@@ -8,6 +8,7 @@ use hotshot_types::traits::metrics as hsmetrics;
 /// A counter metric wrapper around the Prometheus Counter
 #[derive(Debug, Clone)]
 pub struct PrometheusCounter {
+    /// The Prometheus counter
     counter: prometheus::Counter,
 }
 
@@ -27,6 +28,7 @@ impl hsmetrics::Counter for PrometheusCounter {
 /// A counter family metric wrapper around the Prometheus CounterVec
 #[derive(Debug, Clone)]
 pub struct PrometheusCounterFamily {
+    /// The Prometheus counter family
     counter_family: prometheus::CounterVec,
 }
 
@@ -39,7 +41,7 @@ impl PrometheusCounterFamily {
 
 impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Counter>> for PrometheusCounterFamily {
     fn create(&self, labels: Vec<String>) -> Box<dyn hsmetrics::Counter> {
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         Box::new(PrometheusCounter::new(self.counter_family.with_label_values(&vals)))
     }
 }
@@ -47,6 +49,7 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Counter>> for PrometheusCounter
 /// A gauge metric wrapper around the Prometheus Gauge
 #[derive(Debug, Clone)]
 pub struct PrometheusGauge {
+    /// The Prometheus gauge
     gauge: prometheus::Gauge,
 }
 
@@ -72,6 +75,7 @@ impl hsmetrics::Gauge for PrometheusGauge {
 /// A gauge family metric wrapper around the Prometheus GaugeVec
 #[derive(Debug, Clone)]
 pub struct PrometheusGaugeFamily {
+    /// The Prometheus gauge family
     gauge_family: prometheus::GaugeVec,
 }
 
@@ -84,7 +88,7 @@ impl PrometheusGaugeFamily {
 
 impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Gauge>> for PrometheusGaugeFamily {
     fn create(&self, labels: Vec<String>) -> Box<dyn hsmetrics::Gauge> {
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         Box::new(PrometheusGauge::new(self.gauge_family.with_label_values(&vals)))
     }
 }
@@ -92,6 +96,7 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Gauge>> for PrometheusGaugeFami
 /// A histogram metric wrapper around the Prometheus Histogram
 #[derive(Debug, Clone)]
 pub struct PrometheusTextGaugeFamily {
+    /// The Prometheus gauge family
     gauge_family: prometheus::GaugeVec,
 }
 
@@ -103,16 +108,16 @@ impl PrometheusTextGaugeFamily {
 }
 
 impl hsmetrics::MetricsFamily<()> for PrometheusTextGaugeFamily {
-    fn create(&self, labels: Vec<String>) -> () {
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    fn create(&self, labels: Vec<String>) {
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         self.gauge_family.with_label_values(&vals).set(1.0);
-        ()
     }
 }
 
 /// A histogram metric wrapper around the Prometheus Histogram
 #[derive(Debug, Clone)]
 pub struct PrometheusHistogram {
+    /// The Prometheus histogram
     histogram: prometheus::Histogram,
 }
 
@@ -132,6 +137,7 @@ impl hsmetrics::Histogram for PrometheusHistogram {
 /// A histogram family metric wrapper around the Prometheus HistogramVec
 #[derive(Debug, Clone)]
 pub struct PrometheusHistogramFamily {
+    /// The Prometheus histogram family
     histogram_family: prometheus::HistogramVec,
 }
 
@@ -144,13 +150,14 @@ impl PrometheusHistogramFamily {
 
 impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHistogramFamily {
     fn create(&self, labels: Vec<String>) -> Box<dyn hsmetrics::Histogram> {
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         Box::new(PrometheusHistogram::new(self.histogram_family.with_label_values(&vals)))
     }
 }
 
  /// Flush the metrics to a file
- pub fn flush_metrics(folder: String, prefix: Option<String>, raw_metrics: String) {
+ #[allow(clippy::missing_panics_doc)]
+ pub fn flush_metrics(folder: &str, prefix: Option<String>, raw_metrics: &str) {
     if raw_metrics.is_empty() {
         return;
     }
@@ -160,8 +167,8 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHisto
     };
     let timestamp = time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_secs();
     let file_path = format!("{folder}/{file_prefix}_{timestamp}.prom");
-    match std::fs::create_dir_all(folder.clone()) {
-        Ok(_) => tracing::info!("Successfully created metrics folder: {folder}"),
+    match std::fs::create_dir_all(folder) {
+       Ok(()) => tracing::info!("Successfully created metrics folder: {folder}"),
         Err(e) => {
             tracing::error!("Failed to create folder: {folder}: {e}");
             return;
@@ -171,11 +178,11 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHisto
     match File::create(file_path) {
         Ok(mut f) => {
             match f.write_all(raw_metrics.as_bytes()) {
-                Ok(_) => {
+                Ok(()) => {
                     tracing::info!("Successfully wrote metrics to file");
                     // flush/close file
                     match f.sync_all() {
-                        Ok(_) => (),
+                       Ok(()) => (),
                         Err(e) => tracing::error!("Failed to flush metrics to file: {}", e),
                     }
                 },
@@ -189,9 +196,13 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHisto
 /// A metrics implementation that uses Prometheus as the backend
 #[derive(Debug, Clone, Default)]
 pub struct PrometheusMetrics {
+    /// The Prometheus registry
     registry: prometheus::Registry,
+    /// The port the metrics server is running on
     port: Option<u16>,
+    /// The prefix/namespace for the metrics
     prefix: Option<String>,
+    /// The folder where the metrics are stored
     folder: Option<String>,
 }
 
@@ -221,6 +232,7 @@ impl PrometheusMetrics {
         }
     }
 
+    /// Get the name of the metric with the prefix
     fn get_name(&self, name: String) -> String {
         match &self.prefix {
             Some(p) => format!("{p}_{name}"),
@@ -291,7 +303,7 @@ impl hsmetrics::Metrics for PrometheusMetrics {
 
     fn counter_family(&self, name: String, labels: Vec<String>) -> Box<dyn hsmetrics::CounterFamily> {
         let formatted_name = self.get_name(name.clone());
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         let counter_vec = prometheus::CounterVec::new(
             prometheus::Opts::new(formatted_name, format!("Counter family for {name}")),
             &vals,
@@ -302,7 +314,7 @@ impl hsmetrics::Metrics for PrometheusMetrics {
 
     fn gauge_family(&self, name: String, labels: Vec<String>) -> Box<dyn hsmetrics::GaugeFamily> {
         let formatted_name = self.get_name(name.clone());
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         let gauge_vec = prometheus::GaugeVec::new(
             prometheus::Opts::new(formatted_name, format!("Gauge family for {name}")),
             &vals,
@@ -313,7 +325,7 @@ impl hsmetrics::Metrics for PrometheusMetrics {
 
     fn histogram_family(&self, name: String, labels: Vec<String>) -> Box<dyn hsmetrics::HistogramFamily> {
         let formatted_name = self.get_name(name.clone());
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         let histogram_vec = prometheus::HistogramVec::new(
             prometheus::HistogramOpts::new(formatted_name, format!("Histogram family for {name}")).buckets(vec![1.0, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0]),
             &vals,
@@ -324,7 +336,7 @@ impl hsmetrics::Metrics for PrometheusMetrics {
 
     fn text_family(&self, name: String, labels: Vec<String>) -> Box<dyn hsmetrics::TextFamily> {
         let formatted_name = self.get_name(name.clone());
-        let vals: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let vals: Vec<&str> = labels.iter().map(std::string::String::as_str).collect();
         let gauge_vec = prometheus::GaugeVec::new(
             prometheus::Opts::new(formatted_name, format!("Gauge family for {name}")),
             &vals,
@@ -338,7 +350,7 @@ impl hsmetrics::Metrics for PrometheusMetrics {
             Some(p) => format!("{p}_{subgroup_name}"),
             None => subgroup_name,
         };
-        Box::new(PrometheusMetrics::new_with_prefix(self.registry.clone(), self.port.clone(), prefix, self.folder.clone()))
+        Box::new(PrometheusMetrics::new_with_prefix(self.registry.clone(), self.port, prefix, self.folder.clone()))
     }
 }
 

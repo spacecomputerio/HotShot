@@ -319,17 +319,14 @@ async fn main() -> Result<()> {
                 &public_key,
                 &private_key,
                 &known_libp2p_nodes,
-                Some(m.clone()),
+                Some(Arc::<PrometheusMetrics>::clone(&m)),
             )
             .await
             .with_context(|| "Failed to create libp2p network")?;
 
             tracing::info!("Libp2p network created");
 
-            let met = match args.metrics_port {
-                Some(_) => Some(m.clone()),
-                None => None,
-            };
+            let met = args.metrics_port.map(|_| Arc::<PrometheusMetrics>::clone(&m));
             // Start consensus
             let join_handle = start_consensus::<Libp2pImpl>(
                 public_key,
@@ -353,15 +350,14 @@ async fn main() -> Result<()> {
 
             tracing::info!("Exiting libp2p network");
             match m.gather() {
-                Some(collected_metrics) => match args.metrics_dir {
-                    Some(metrics_folder) => {
+                Some(collected_metrics) => {
+                    if let Some(metrics_folder) = args.metrics_dir {
                         flush_metrics(
-                            metrics_folder,
+                            &metrics_folder,
                             Some("hotshot".to_string()),
-                            collected_metrics,
+                            &collected_metrics,
                         );
                     }
-                    None => {}
                 },
                 None => {
                     tracing::error!("Failed to gather metrics");

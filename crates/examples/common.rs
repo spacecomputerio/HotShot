@@ -221,7 +221,7 @@ async fn start_consensus<
     };
 
     let consensus_metrics: ConsensusMetricsValue = match met.clone() {
-        Some(m) => ConsensusMetricsValue::new(&*m.clone()),
+        Some(m) => ConsensusMetricsValue::new(&*Arc::<PrometheusMetrics>::clone(&m)),
         None => ConsensusMetricsValue::default(),
     };
 
@@ -285,26 +285,20 @@ async fn start_consensus<
         start_rpc(rpc_port, tx_send.clone()).await;
     });
 
-    match met.clone() {
-        Some(m) => {
-            let metrics_cloned = m.clone();
-            tokio::spawn(async move {
-                let port = metrics_cloned.get_port();
-                match port {
-                    Some(port) => {
-                        tracing::info!("Starting metrics server on port {}", port);
-                        let bind_endpoint = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), port);
-                        serve_metrics(bind_endpoint, metrics_cloned.get_registry()).await;
-                    }
-                    None => {}
-                };
-            });
-        }
-        None => {}
+    if let Some(m)  = met.clone() {
+        let metrics_cloned = Arc::<PrometheusMetrics>::clone(&m);
+        tokio::spawn(async move {
+            let port = metrics_cloned.get_port();
+            if let Some(port) = port {
+                tracing::info!("Starting metrics server on port {}", port);
+                let bind_endpoint = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), port);
+                serve_metrics(bind_endpoint, metrics_cloned.get_registry()).await;
+            }
+        });
     }
 
     let metrics_cloned = match met.clone() {
-        Some(m) => m.clone(),
+        Some(m) => Arc::<PrometheusMetrics>::clone(&m),
         None => init_metrics(None, None),
     };
 
@@ -316,7 +310,7 @@ async fn start_consensus<
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
         let mut metrics_interval = tokio::time::interval(Duration::from_secs(60));
-        let metrics = metrics_cloned.clone();
+        let metrics = Arc::<PrometheusMetrics>::clone(&metrics_cloned);
         // Get the event stream for this particular node
         let mut event_stream = handle.event_stream();
         // Wait for a `Decide` event for the view number we requested
@@ -329,10 +323,11 @@ async fn start_consensus<
                     tracing::info!("Metrics interval tick!");
                     let file_prefix = metrics.get_prefix();
                     let metrics_folder = metrics.get_folder().unwrap();
-                    match metrics.gather() {
-                        Some(collected_metrics) => flush_metrics(metrics_folder, file_prefix, collected_metrics),
-                        None => tracing::error!("Failed to gather metrics"),
-                    };
+                    if let Some(collected_metrics) = metrics.gather() { 
+                        flush_metrics(&metrics_folder, file_prefix, &collected_metrics);
+                    } else { 
+                        tracing::error!("Failed to gather metrics"); 
+                    }
                 }                
                 Some(tx) = tx_recv.recv() => {
                     // take the first transaction_size bytes of the transaction
