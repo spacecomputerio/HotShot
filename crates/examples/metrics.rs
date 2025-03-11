@@ -159,9 +159,16 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHisto
         None => "metrics".to_string(),
     };
     let timestamp = time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_secs();
-    let file = format!("{folder}/{file_prefix}_{timestamp}.prom");
-    tracing::info!("Writing metrics to file: {}", file);
-    match File::create(file) {
+    let file_path = format!("{folder}/{file_prefix}_{timestamp}.prom");
+    match std::fs::create_dir_all(folder.clone()) {
+        Ok(_) => tracing::info!("Successfully created metrics folder: {folder}"),
+        Err(e) => {
+            tracing::error!("Failed to create folder: {folder}: {e}");
+            return;
+        },
+    }
+    tracing::info!("Writing metrics to file: {file_path}");
+    match File::create(file_path) {
         Ok(mut f) => {
             match f.write_all(raw_metrics.as_bytes()) {
                 Ok(_) => {
