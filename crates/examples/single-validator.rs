@@ -5,7 +5,8 @@
 //! real builder is in an upstream repo)
 
 use std::{
-    collections::HashMap, net::IpAddr, num::NonZero, str::FromStr, sync::Arc, time::Duration,
+    collections::HashMap, io::Write, net::IpAddr, num::NonZero, str::FromStr, sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -98,6 +99,18 @@ struct Args {
     /// "combined", "cdn", or "libp2p"
     #[arg(long, default_value = "combined")]
     network: String,
+
+    /// The port to use for exposing metrics
+    /// If not specified, metrics are not exposed
+    /// NOTE: This is only used for the libp2p network
+    #[arg(long)]
+    metrics_port: Option<u16>,
+
+    /// The folder to write metrics to, e.g. '/var/logs/metrics_hotshot'
+    /// If not specified, metrics are not flushed to file system
+    /// NOTE: This is only used for the libp2p network
+    #[arg(long)]
+    metrics_dir: Option<String>,
 }
 
 /// Get the IP address to use based on the source
@@ -290,6 +303,7 @@ async fn main() -> Result<()> {
                 args.num_transactions_per_view,
                 args.transaction_size,
                 args.num_views,
+                None,
             )
             .await?;
 
@@ -297,6 +311,7 @@ async fn main() -> Result<()> {
             join_handle.await?;
         }
         NetworkType::LibP2P => {
+            let m = init_metrics(args.metrics_port, args.metrics_dir.clone());
             // Create the network
             let network = new_libp2p_network(
                 bind_multiaddr,
@@ -304,12 +319,16 @@ async fn main() -> Result<()> {
                 &public_key,
                 &private_key,
                 &known_libp2p_nodes,
+                Some(Arc::<PrometheusMetrics>::clone(&m)),
             )
             .await
             .with_context(|| "Failed to create libp2p network")?;
 
             tracing::info!("Libp2p network created");
 
+            let met = args
+                .metrics_port
+                .map(|_| Arc::<PrometheusMetrics>::clone(&m));
             // Start consensus
             let join_handle = start_consensus::<Libp2pImpl>(
                 public_key,
@@ -324,11 +343,28 @@ async fn main() -> Result<()> {
                 args.num_transactions_per_view,
                 args.transaction_size,
                 args.num_views,
+                met.clone(),
             )
             .await?;
 
             // Wait for consensus to finish
             join_handle.await?;
+
+            tracing::info!("Exiting libp2p network");
+            match m.gather() {
+                Some(collected_metrics) => {
+                    if let Some(metrics_folder) = args.metrics_dir {
+                        flush_metrics(
+                            &metrics_folder,
+                            Some("hotshot".to_string()),
+                            &collected_metrics,
+                        );
+                    }
+                }
+                None => {
+                    tracing::error!("Failed to gather metrics");
+                }
+            };
         }
         NetworkType::Combined => {
             // Create the network
@@ -358,6 +394,7 @@ async fn main() -> Result<()> {
                 args.num_transactions_per_view,
                 args.transaction_size,
                 args.num_views,
+                None,
             )
             .await?;
 

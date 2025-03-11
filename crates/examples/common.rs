@@ -1,13 +1,24 @@
 use std::time::Instant;
-
+use std::net::Ipv4Addr;
 use async_lock::RwLock;
 use hotshot_types::{
-    data::EpochNumber, traits::node_implementation::ConsensusTime, utils::non_crypto_hash,
+    data::EpochNumber, traits::{node_implementation::ConsensusTime,metrics}, utils::non_crypto_hash, 
 };
 use simple_moving_average::SingleSumSMA;
 use simple_moving_average::SMA;
 
 include!("rpc.rs");
+
+include!("metrics.rs");
+
+/// initialize prom metrics
+#[must_use]
+pub fn init_metrics(port: Option<u16>, metrics_folder: Option<String>) -> Arc<PrometheusMetrics> {
+    // Create a new metrics instance
+    let registry = prometheus::Registry::new();
+    let metrics = PrometheusMetrics::new_with_prefix(registry, port, "hotshot".to_string(), metrics_folder);
+    Arc::new(metrics)
+}
 
 /// The type of network to use for the example
 #[derive(Debug, PartialEq, Eq)]
@@ -82,6 +93,7 @@ async fn new_libp2p_network(
     public_key: &BLSPubKey,
     private_key: &BLSPrivKey,
     known_libp2p_nodes: &[Multiaddr],
+    met: Option<Arc<dyn metrics::Metrics>>,    
 ) -> Result<Arc<Libp2pNetwork<TestTypes>>> {
     // Derive the Libp2p keypair from the private key
     let libp2p_keypair = derive_libp2p_keypair::<BLSPubKey>(private_key)
@@ -115,12 +127,16 @@ async fn new_libp2p_network(
         },
     };
 
+    let m: Libp2pMetricsValue = match met {
+        Some(m) => Libp2pMetricsValue::new(&*m),
+        None => Libp2pMetricsValue::default(),
+    };
     // Create the network with the config
     Ok(Arc::new(
         Libp2pNetwork::new(
             libp2p_config,
             public_key,
-            Libp2pMetricsValue::default(),
+            m,
             None,
         )
         .await
@@ -136,7 +152,7 @@ async fn new_combined_network(
     known_libp2p_nodes: &[Multiaddr],
     is_da_node: bool,
     public_key: &BLSPubKey,
-    private_key: &BLSPrivKey,
+    private_key: &BLSPrivKey, 
 ) -> Result<Arc<hotshot::traits::implementations::CombinedNetworks<TestTypes>>> {
     // Create the CDN network and launch the CDN
     let cdn_network = Arc::into_inner(new_cdn_network(
@@ -155,6 +171,7 @@ async fn new_combined_network(
             public_key,
             private_key,
             known_libp2p_nodes,
+            None,
         )
         .await?,
     )
@@ -195,12 +212,18 @@ async fn start_consensus<
     _num_transactions_per_view: usize,
     transaction_size: usize,
     num_views: Option<usize>,
+    met: Option<Arc<PrometheusMetrics>>,
 ) -> Result<tokio::task::JoinHandle<()>> {
     // Create the marketplace config
     let marketplace_config: MarketplaceConfig<TestTypes, I> = MarketplaceConfig {
         auction_results_provider: TestAuctionResultsProvider::<TestTypes>::default().into(),
         // TODO: we need to pass a valid fallback builder url here somehow
         fallback_builder_url: Url::parse("http://localhost:8080").unwrap(),
+    };
+
+    let consensus_metrics: ConsensusMetricsValue = match met.clone() {
+        Some(m) => ConsensusMetricsValue::new(&*Arc::<PrometheusMetrics>::clone(&m)),
+        None => ConsensusMetricsValue::default(),
     };
 
     // Initialize the system context
@@ -211,7 +234,7 @@ async fn start_consensus<
         Arc::new(RwLock::new(memberships.clone())),
         network,
         hotshot_initializer,
-        ConsensusMetricsValue::default(),
+        consensus_metrics,
         TestStorage::<TestTypes>::default(),
         marketplace_config,
     )
@@ -263,14 +286,50 @@ async fn start_consensus<
         start_rpc(rpc_port, tx_send.clone()).await;
     });
 
+    if let Some(m)  = met.clone() {
+        let metrics_cloned = Arc::<PrometheusMetrics>::clone(&m);
+        tokio::spawn(async move {
+            let port = metrics_cloned.get_port();
+            if let Some(port) = port {
+                tracing::info!("Starting metrics server on port {}", port);
+                let bind_endpoint = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), port);
+                serve_metrics(bind_endpoint, metrics_cloned.get_registry()).await;
+            }
+        });
+    }
+
+    let metrics_cloned = match met.clone() {
+        Some(m) => Arc::<PrometheusMetrics>::clone(&m),
+        None => init_metrics(None, None),
+    };
+
+    let flush_metrics_on = match met.clone() {
+        Some(m) => m.get_folder().is_some(),
+        None => false,
+    };
+
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
+        let mut metrics_interval = tokio::time::interval(Duration::from_secs(60));
+        let metrics = Arc::<PrometheusMetrics>::clone(&metrics_cloned);
         // Get the event stream for this particular node
         let mut event_stream = handle.event_stream();
-
         // Wait for a `Decide` event for the view number we requested
         loop {
             tokio::select! {
+                _ = metrics_interval.tick() => {
+                    if !flush_metrics_on {
+                        continue;
+                    }
+                    tracing::info!("Metrics interval tick!");
+                    let file_prefix = metrics.get_prefix();
+                    let metrics_folder = metrics.get_folder().unwrap();
+                    if let Some(collected_metrics) = metrics.gather() { 
+                        flush_metrics(&metrics_folder, file_prefix, &collected_metrics);
+                    } else { 
+                        tracing::error!("Failed to gather metrics"); 
+                    }
+                }                
                 Some(tx) = tx_recv.recv() => {
                     // take the first transaction_size bytes of the transaction
                     let n = if tx.len() < transaction_size {

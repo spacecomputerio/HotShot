@@ -312,6 +312,7 @@ async fn main() -> Result<()> {
                         args.num_transactions_per_view,
                         args.transaction_size,
                         args.num_views,
+                        None,
                     )
                     .await?,
                 );
@@ -344,6 +345,7 @@ async fn main() -> Result<()> {
                         args.num_transactions_per_view,
                         args.transaction_size,
                         args.num_views,
+                        None,
                     )
                     .await?,
                 );
@@ -358,6 +360,7 @@ async fn main() -> Result<()> {
                     &public_key,
                     &private_key,
                     &known_libp2p_nodes,
+                    None,
                 )
                 .await
                 .with_context(|| "Failed to create Libp2p network")?;
@@ -377,6 +380,7 @@ async fn main() -> Result<()> {
                         args.num_transactions_per_view,
                         args.transaction_size,
                         args.num_views,
+                        None,
                     )
                     .await?,
                 );
