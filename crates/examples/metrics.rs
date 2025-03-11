@@ -155,8 +155,8 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHisto
         return;
     }
     let file_prefix = match prefix {
-        Some(p) => format!("metrics_{p}_"),
-        None => "metrics_".to_string(),
+        Some(p) => format!("metrics_{p}"),
+        None => "metrics".to_string(),
     };
     let timestamp = time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_secs();
     let file = format!("{folder}/{file_prefix}_{timestamp}.prom");
