@@ -1,5 +1,7 @@
-use std::net::SocketAddr;
-
+use std::{net::SocketAddr, time};
+#[allow(unused_imports)]
+use std::io::Write as _;
+use std::fs::File;
 use hotshot_types::traits::metrics as hsmetrics;
 // use warp::Filter;
 
@@ -147,12 +149,36 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHisto
     }
 }
 
+ /// Flush the metrics to a file
+ pub fn flush_metrics(folder: String, prefix: Option<String>, raw_metrics: String) {
+    if raw_metrics.is_empty() {
+        return;
+    }
+    let file_prefix = match prefix {
+        Some(p) => format!("metrics_{p}_"),
+        None => "metrics_".to_string(),
+    };
+    let timestamp = time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_secs();
+    let file = format!("{folder}/{file_prefix}_{timestamp}.prom");
+    tracing::info!("Writing metrics to file: {}", file);
+    match File::create(file) {
+        Ok(mut f) => {
+            match f.write_all(raw_metrics.as_bytes()) {
+                Ok(_) => tracing::info!("Successfully wrote metrics to file"),
+                Err(e) => tracing::error!("Failed to write metrics to file: {}", e),
+            }
+        }
+        Err(e) => tracing::error!("Failed to create file: {}", e),
+    }
+}
+
 /// A metrics implementation that uses Prometheus as the backend
 #[derive(Debug, Clone, Default)]
 pub struct PrometheusMetrics {
     registry: prometheus::Registry,
     port: Option<u16>,
     prefix: Option<String>,
+    folder: Option<String>,
 }
 
 impl PrometheusMetrics {
@@ -162,6 +188,7 @@ impl PrometheusMetrics {
             registry: prometheus::Registry::new(),
             port: None,
             prefix: None,
+            folder: None,
         }
     }
 
@@ -170,11 +197,13 @@ impl PrometheusMetrics {
         registry: prometheus::Registry,
         port: Option<u16>,
         prefix: String,
+        folder: Option<String>,
     ) -> Self {
         Self {
             registry,
             port,
             prefix: Some(prefix),
+            folder,
         }
     }
 
@@ -193,6 +222,16 @@ impl PrometheusMetrics {
     /// Get the port the metrics server is running on
     pub fn get_port(&self) -> Option<u16> {
         self.port
+    }
+
+    /// Get the folder where the metrics are stored
+    pub fn get_folder(&self) -> Option<String> {
+        self.folder.clone()
+    }
+
+    /// Get the prefix/namespace for the metrics
+    pub fn get_prefix(&self) -> Option<String> {
+        self.prefix.clone()
     }
 
     /// Gather the metrics and return them as a string
@@ -285,7 +324,7 @@ impl hsmetrics::Metrics for PrometheusMetrics {
             Some(p) => format!("{p}_{subgroup_name}"),
             None => subgroup_name,
         };
-        Box::new(PrometheusMetrics::new_with_prefix(self.registry.clone(), self.port.clone(), prefix))
+        Box::new(PrometheusMetrics::new_with_prefix(self.registry.clone(), self.port.clone(), prefix, self.folder.clone()))
     }
 }
 

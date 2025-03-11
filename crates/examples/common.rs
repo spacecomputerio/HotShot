@@ -1,6 +1,5 @@
 use std::time::Instant;
 use std::net::Ipv4Addr;
-
 use async_lock::RwLock;
 use hotshot_types::{
     data::EpochNumber, traits::{node_implementation::ConsensusTime,metrics}, utils::non_crypto_hash, 
@@ -13,10 +12,10 @@ include!("rpc.rs");
 include!("metrics.rs");
 
 /// initialize prom metrics
-pub fn init_metrics(port: Option<u16>) -> Arc<PrometheusMetrics> {
+pub fn init_metrics(port: Option<u16>, metrics_folder: Option<String>) -> Arc<PrometheusMetrics> {
     // Create a new metrics instance
     let registry = prometheus::Registry::new();
-    let metrics = PrometheusMetrics::new_with_prefix(registry, port, "hotshot".to_string());
+    let metrics = PrometheusMetrics::new_with_prefix(registry, port, "hotshot".to_string(), metrics_folder);
     Arc::new(metrics)
 }
 
@@ -304,18 +303,37 @@ async fn start_consensus<
         None => {}
     }
 
-    let metrics_cloned = match met {
+    let metrics_cloned = match met.clone() {
         Some(m) => m.clone(),
-        None => init_metrics(None),
+        None => init_metrics(None, None),
     };
+
+    let flush_metrics_on = match met.clone() {
+        Some(m) => m.get_folder().is_some(),
+        None => false,
+    };
+
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
+        let mut metrics_interval = tokio::time::interval(Duration::from_secs(60));
+        let metrics = metrics_cloned.clone();
         // Get the event stream for this particular node
         let mut event_stream = handle.event_stream();
-
         // Wait for a `Decide` event for the view number we requested
         loop {
             tokio::select! {
+                _ = metrics_interval.tick() => {
+                    if !flush_metrics_on {
+                        continue;
+                    }
+                    tracing::info!("Metrics interval tick!");
+                    let file_prefix = metrics.get_prefix();
+                    let metrics_folder = metrics.get_folder().unwrap();
+                    match metrics.gather() {
+                        Some(collected_metrics) => flush_metrics(metrics_folder, file_prefix, collected_metrics),
+                        None => tracing::error!("Failed to gather metrics"),
+                    };
+                }                
                 Some(tx) = tx_recv.recv() => {
                     // take the first transaction_size bytes of the transaction
                     let n = if tx.len() < transaction_size {
@@ -449,20 +467,6 @@ async fn start_consensus<
                                 // Break when we've decided on the view number we requested
                                 break;
                             }
-                        }
-
-                        if *qc.view_number % 100 == 0 {
-                            // print metrics every 100 views
-                            let collected_metrics = metrics_cloned.gather();
-                            match collected_metrics {
-                                Some(metrics) => {
-                                    println!("----\nMETRICS----\n{metrics}");
-                                }
-                                None => {
-                                    info!("No metrics collected");
-                                }
-                            }
-                            break;
                         }
                     }
                 }

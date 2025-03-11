@@ -106,11 +106,11 @@ struct Args {
     #[arg(long)]
     metrics_port: Option<u16>,
 
-    /// The file to write metrics to
-    /// If not specified, metrics are not written to a file
+    /// The folder to write metrics to, e.g. '/var/logs/metrics_hotshot'
+    /// If not specified, metrics are not flushed to file system
     /// NOTE: This is only used for the libp2p network
     #[arg(long)]
-    metrics_file: Option<String>,
+    metrics_dir: Option<String>,
 }
 
 /// Get the IP address to use based on the source
@@ -311,7 +311,7 @@ async fn main() -> Result<()> {
             join_handle.await?;
         }
         NetworkType::LibP2P => {
-            let m = init_metrics(args.metrics_port);
+            let m = init_metrics(args.metrics_port, args.metrics_dir.clone());
             // Create the network
             let network = new_libp2p_network(
                 bind_multiaddr,
@@ -351,20 +351,22 @@ async fn main() -> Result<()> {
             // Wait for consensus to finish
             join_handle.await?;
 
+            tracing::info!("Exiting libp2p network");
             match m.gather() {
-                Some(collected_metrics) => match args.metrics_file {
-                    Some(file) => {
-                        let mut file = std::fs::File::create(file)?;
-                        file.write_all(collected_metrics.as_bytes())?;
+                Some(collected_metrics) => match args.metrics_dir {
+                    Some(metrics_folder) => {
+                        flush_metrics(
+                            metrics_folder,
+                            Some("hotshot".to_string()),
+                            collected_metrics,
+                        );
                     }
-                    None => {
-                        println!("----\nMETRICS----\n{collected_metrics}");
-                    }
+                    None => {}
                 },
                 None => {
                     tracing::error!("Failed to gather metrics");
                 }
-            }
+            };
         }
         NetworkType::Combined => {
             // Create the network
