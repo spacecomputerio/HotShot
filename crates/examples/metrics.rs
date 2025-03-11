@@ -164,7 +164,14 @@ impl hsmetrics::MetricsFamily<Box<dyn hsmetrics::Histogram>> for PrometheusHisto
     match File::create(file) {
         Ok(mut f) => {
             match f.write_all(raw_metrics.as_bytes()) {
-                Ok(_) => tracing::info!("Successfully wrote metrics to file"),
+                Ok(_) => {
+                    tracing::info!("Successfully wrote metrics to file");
+                    // flush/close file
+                    match f.sync_all() {
+                        Ok(_) => (),
+                        Err(e) => tracing::error!("Failed to flush metrics to file: {}", e),
+                    }
+                },
                 Err(e) => tracing::error!("Failed to write metrics to file: {}", e),
             }
         }
