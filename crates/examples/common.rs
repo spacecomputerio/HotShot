@@ -12,6 +12,7 @@ include!("rpc.rs");
 include!("metrics.rs");
 
 /// initialize prom metrics
+#[must_use]
 pub fn init_metrics(port: Option<u16>, metrics_folder: Option<String>) -> Arc<PrometheusMetrics> {
     // Create a new metrics instance
     let registry = prometheus::Registry::new();

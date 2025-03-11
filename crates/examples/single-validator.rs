@@ -326,7 +326,9 @@ async fn main() -> Result<()> {
 
             tracing::info!("Libp2p network created");
 
-            let met = args.metrics_port.map(|_| Arc::<PrometheusMetrics>::clone(&m));
+            let met = args
+                .metrics_port
+                .map(|_| Arc::<PrometheusMetrics>::clone(&m));
             // Start consensus
             let join_handle = start_consensus::<Libp2pImpl>(
                 public_key,
@@ -358,7 +360,7 @@ async fn main() -> Result<()> {
                             &collected_metrics,
                         );
                     }
-                },
+                }
                 None => {
                     tracing::error!("Failed to gather metrics");
                 }

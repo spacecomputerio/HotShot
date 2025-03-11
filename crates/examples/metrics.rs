@@ -14,12 +14,14 @@ pub struct PrometheusCounter {
 
 impl PrometheusCounter {
     /// Create a new Prometheus counter
+    #[must_use]
     pub fn new(counter: prometheus::Counter) -> Self {
         Self { counter }
     }
 }
 
 impl hsmetrics::Counter for PrometheusCounter {
+    #[allow(clippy::cast_precision_loss)]
     fn add(&self, amount: usize) {
         self.counter.inc_by(amount as f64);
     }
@@ -34,6 +36,7 @@ pub struct PrometheusCounterFamily {
 
 impl PrometheusCounterFamily {
     /// Create a new Prometheus counter family
+    #[must_use]
     pub fn new(counter_family: prometheus::CounterVec) -> Self {
         Self { counter_family }
     }
@@ -55,6 +58,7 @@ pub struct PrometheusGauge {
 
 impl PrometheusGauge {
     /// Create a new Prometheus gauge
+    #[must_use]
     pub fn new(gauge: prometheus::Gauge) -> Self {
         Self { gauge }
     }
@@ -62,11 +66,13 @@ impl PrometheusGauge {
 
 impl hsmetrics::Gauge for PrometheusGauge {
     /// Set the gauge value
+    #[allow(clippy::cast_precision_loss)]
     fn set(&self, value: usize) {
         self.gauge.set(value as f64);
     }
 
     /// Update the gauge value
+    #[allow(clippy::cast_precision_loss)]
     fn update(&self, delta: i64) {
         self.gauge.add(delta as f64);
     }
@@ -81,6 +87,7 @@ pub struct PrometheusGaugeFamily {
 
 impl PrometheusGaugeFamily {
     /// Create a new Prometheus gauge family
+    #[must_use]
     pub fn new(gauge_family: prometheus::GaugeVec) -> Self {
         Self { gauge_family }
     }
@@ -102,6 +109,7 @@ pub struct PrometheusTextGaugeFamily {
 
 impl PrometheusTextGaugeFamily {
     /// Create a new Prometheus gauge family
+    #[must_use]
     pub fn new(gauge_family: prometheus::GaugeVec) -> Self {
         Self { gauge_family }
     }
@@ -123,6 +131,7 @@ pub struct PrometheusHistogram {
 
 impl PrometheusHistogram {
     /// Create a new Prometheus histogram
+    #[must_use]
     pub fn new(histogram: prometheus::Histogram) -> Self {
         Self { histogram }
     }
@@ -143,6 +152,7 @@ pub struct PrometheusHistogramFamily {
 
 impl PrometheusHistogramFamily {
     /// Create a new Prometheus histogram family
+    #[must_use]
     pub fn new(histogram_family: prometheus::HistogramVec) -> Self {
         Self { histogram_family }
     }
@@ -208,6 +218,7 @@ pub struct PrometheusMetrics {
 
 impl PrometheusMetrics {
     /// Create a new Prometheus metrics instance
+    #[must_use]
     pub fn new() -> Self {
         Self {
             registry: prometheus::Registry::new(),
@@ -218,6 +229,7 @@ impl PrometheusMetrics {
     }
 
     /// Create a new Prometheus metrics instance with a prefix/namespace
+    #[must_use]
     pub fn new_with_prefix(
         registry: prometheus::Registry,
         port: Option<u16>,
@@ -233,6 +245,7 @@ impl PrometheusMetrics {
     }
 
     /// Get the name of the metric with the prefix
+    #[must_use]
     fn get_name(&self, name: String) -> String {
         match &self.prefix {
             Some(p) => format!("{p}_{name}"),
@@ -241,26 +254,31 @@ impl PrometheusMetrics {
     }
 
     /// Get the Prometheus registry
+    #[must_use]
     pub fn get_registry(&self) -> prometheus::Registry {
         self.registry.clone()
     }
 
     /// Get the port the metrics server is running on
+    #[must_use]
     pub fn get_port(&self) -> Option<u16> {
         self.port
     }
 
     /// Get the folder where the metrics are stored
+    #[must_use]
     pub fn get_folder(&self) -> Option<String> {
         self.folder.clone()
     }
 
     /// Get the prefix/namespace for the metrics
+    #[must_use]
     pub fn get_prefix(&self) -> Option<String> {
         self.prefix.clone()
     }
 
     /// Gather the metrics and return them as a string
+    #[must_use]
     pub fn gather(&self) -> Option<String> {
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
