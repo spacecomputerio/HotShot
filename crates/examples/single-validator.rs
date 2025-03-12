@@ -111,6 +111,10 @@ struct Args {
     /// NOTE: This is only used for the libp2p network
     #[arg(long)]
     metrics_dir: Option<String>,
+
+    /// The metrics interval (sec) to use to flush metrics to file system
+    #[arg(long, default_value_t = 60)]
+    metrics_interval: usize,
 }
 
 /// Get the IP address to use based on the source
@@ -311,7 +315,11 @@ async fn main() -> Result<()> {
             join_handle.await?;
         }
         NetworkType::LibP2P => {
-            let m = init_metrics(args.metrics_port, args.metrics_dir.clone());
+            let m = init_metrics(
+                args.metrics_port,
+                args.metrics_dir.clone(),
+                args.metrics_interval,
+            );
             // Create the network
             let network = new_libp2p_network(
                 bind_multiaddr,

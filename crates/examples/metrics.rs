@@ -214,6 +214,8 @@ pub struct PrometheusMetrics {
     prefix: Option<String>,
     /// The folder where the metrics are stored
     folder: Option<String>,
+    /// The interval in seconds to gather metrics
+    metrics_interva_sec: usize,
 }
 
 impl PrometheusMetrics {
@@ -225,6 +227,7 @@ impl PrometheusMetrics {
             port: None,
             prefix: None,
             folder: None,
+            metrics_interva_sec: 60,
         }
     }
 
@@ -235,12 +238,14 @@ impl PrometheusMetrics {
         port: Option<u16>,
         prefix: String,
         folder: Option<String>,
+        metrics_interva_sec: usize,
     ) -> Self {
         Self {
             registry,
             port,
             prefix: Some(prefix),
             folder,
+            metrics_interva_sec,
         }
     }
 
@@ -275,6 +280,12 @@ impl PrometheusMetrics {
     #[must_use]
     pub fn get_prefix(&self) -> Option<String> {
         self.prefix.clone()
+    }
+
+    /// Get the metrics interval in seconds
+    #[must_use]
+    pub fn get_interva_sec(&self) -> usize {
+        self.metrics_interva_sec
     }
 
     /// Gather the metrics and return them as a string
@@ -368,7 +379,7 @@ impl hsmetrics::Metrics for PrometheusMetrics {
             Some(p) => format!("{p}_{subgroup_name}"),
             None => subgroup_name,
         };
-        Box::new(PrometheusMetrics::new_with_prefix(self.registry.clone(), self.port, prefix, self.folder.clone()))
+        Box::new(PrometheusMetrics::new_with_prefix(self.registry.clone(), self.port, prefix, self.folder.clone(), self.metrics_interva_sec))
     }
 }
 
