@@ -13,10 +13,10 @@ include!("metrics.rs");
 
 /// initialize prom metrics
 #[must_use]
-pub fn init_metrics(port: Option<u16>, metrics_folder: Option<String>) -> Arc<PrometheusMetrics> {
+pub fn init_metrics(port: Option<u16>, metrics_folder: Option<String>, metrics_interva_sec: usize) -> Arc<PrometheusMetrics> {
     // Create a new metrics instance
     let registry = prometheus::Registry::new();
-    let metrics = PrometheusMetrics::new_with_prefix(registry, port, "hotshot".to_string(), metrics_folder);
+    let metrics = PrometheusMetrics::new_with_prefix(registry, port, "hotshot".to_string(), metrics_folder, metrics_interva_sec);
     Arc::new(metrics)
 }
 
@@ -298,20 +298,22 @@ async fn start_consensus<
         });
     }
 
-    let metrics_cloned = match met.clone() {
-        Some(m) => Arc::<PrometheusMetrics>::clone(&m),
-        None => init_metrics(None, None),
-    };
-
     let flush_metrics_on = match met.clone() {
         Some(m) => m.get_folder().is_some(),
         None => false,
     };
 
+    let metrics_cloned = match met.clone() {
+        Some(m) => Arc::<PrometheusMetrics>::clone(&m),
+        None => init_metrics(None, None, 0),
+    };
+
+
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
-        let mut metrics_interval = tokio::time::interval(Duration::from_secs(60));
         let metrics = Arc::<PrometheusMetrics>::clone(&metrics_cloned);
+        let metrics_interval_sec = metrics.get_interva_sec();
+        let mut metrics_interval = tokio::time::interval(Duration::from_secs(metrics_interval_sec as u64));
         // Get the event stream for this particular node
         let mut event_stream = handle.event_stream();
         // Wait for a `Decide` event for the view number we requested
