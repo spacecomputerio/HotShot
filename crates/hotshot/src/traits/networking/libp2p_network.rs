@@ -93,6 +93,14 @@ pub struct Libp2pMetricsValue {
     pub num_self_routed_messages: Box<dyn Counter>,
     /// Whether or not the network is considered ready
     pub is_ready: Box<dyn Gauge>,
+    /// The number of broadcasted (direct messages)
+    pub num_broadcasted_da: Box<dyn Counter>,
+    /// The number of broadcasted (gossip messages)
+    pub num_broadcasted_gossip: Box<dyn Counter>,
+    /// The number of successfull direct messages
+    pub num_direct_req_success: Box<dyn Counter>,
+    /// The number of received messages
+    pub num_recv_messages: Box<dyn Counter>,
 }
 
 impl Libp2pMetricsValue {
@@ -114,6 +122,10 @@ impl Libp2pMetricsValue {
             num_self_routed_messages: subgroup
                 .create_counter("num_self_routed_messages".into(), None),
             is_ready: subgroup.create_gauge("is_ready".into(), None),
+            num_broadcasted_da: subgroup.create_counter("num_broadcasted_da".into(), None),
+            num_broadcasted_gossip: subgroup.create_counter("num_broadcasted_gossip".into(), None),
+            num_direct_req_success: subgroup.create_counter("num_direct_req_success".into(), None),
+            num_recv_messages: subgroup.create_counter("num_recv_messages".into(), None),
         }
     }
 }
@@ -791,6 +803,8 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             return Err(e);
         }
 
+        self.inner.metrics.num_broadcasted_gossip.add(1);
+
         Ok(())
     }
 
@@ -822,6 +836,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             .collect();
 
         if errors.is_empty() {
+            self.inner.metrics.num_broadcasted_da.add(1);
             Ok(())
         } else {
             Err(NetworkError::Multiple(errors))
@@ -893,7 +908,10 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         }
 
         match self.inner.handle.direct_request(pid, &message) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.inner.metrics.num_direct_req_success.add(1);
+                Ok(())
+            }
             Err(e) => {
                 self.inner.metrics.num_failed_messages.add(1);
                 Err(e)
@@ -918,7 +936,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                 self.inner.metrics.num_failed_recv_messages.add(1);
                 NetworkError::ShutDown
             })?;
-
+        self.inner.metrics.num_recv_messages.add(1);
         Ok(result)
     }
 
