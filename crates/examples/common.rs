@@ -11,6 +11,43 @@ include!("rpc.rs");
 
 include!("metrics.rs");
 
+/// Validator-specific metrics
+#[derive(Clone, Debug)]
+pub struct ValidatorMetricsValue {
+    /// The number of blocks proposed by the validator 
+    pub num_block_proposed: Box<dyn Counter>,
+    /// The number of bytes in the blocks proposed by the validator
+    pub num_block_size_proposed: Box<dyn Counter>,
+    /// The number of transactions proposed by the validator    
+    pub num_tx_proposed: Box<dyn Counter>,
+    /// The number of transactions submitted by the validator
+    pub num_tx_submitted: Box<dyn Counter>,
+    /// The number of of failed submit attempts
+    pub num_tx_submit_fail: Box<dyn Counter>,
+}
+
+impl ValidatorMetricsValue {
+    /// Populate the metrics with Validator-specific metrics
+    pub fn new(metrics: &dyn Metrics) -> Self {
+        let subgroup = metrics.subgroup("validator".into());
+        Self {
+            num_block_proposed: subgroup.create_counter("num_block_proposed".into(), None),
+            num_block_size_proposed: subgroup.create_counter("num_block_size_proposed".into(), None),
+            num_tx_proposed: subgroup.create_counter("num_tx_proposed".into(), None),
+            num_tx_submitted: subgroup.create_counter("num_tx_submitted".into(), None),
+            num_tx_submit_fail: subgroup.create_counter("num_tx_submit_fail".into(), None),
+        }
+    }
+}
+
+impl Default for ValidatorMetricsValue {
+    /// Initialize with empty metrics
+    fn default() -> Self {
+        Self::new(&*NoMetrics::boxed())
+    }
+}
+
+
 /// initialize prom metrics
 #[must_use]
 pub fn init_metrics(port: Option<u16>, metrics_folder: Option<String>, metrics_interva_sec: usize) -> Arc<PrometheusMetrics> {
@@ -282,8 +319,13 @@ async fn start_consensus<
     // Start a new tokio tcp listener that acts as RPC server, exposing the following functions:
     // * send_txs - accepts a single arg 'txs' (Vec<Vec<u8>>)
     let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel(100);
+    let rpc_metrics = if let Some(m)  = met.clone() {
+        RpcMetricsValue::new(&*Arc::<PrometheusMetrics>::clone(&m))
+    } else {
+        RpcMetricsValue::default()
+    }; 
     tokio::spawn(async move {
-        start_rpc(rpc_port, tx_send.clone()).await;
+        start_rpc(rpc_port, tx_send.clone(), rpc_metrics).await;
     });
 
     if let Some(m)  = met.clone() {
@@ -308,12 +350,12 @@ async fn start_consensus<
         None => init_metrics(None, None, 0),
     };
 
-
     // Spawn the task to wait for events
     let join_handle = tokio::spawn(async move {
         let metrics = Arc::<PrometheusMetrics>::clone(&metrics_cloned);
         let metrics_interval_sec = metrics.get_interva_sec();
         let mut metrics_interval = tokio::time::interval(Duration::from_secs(metrics_interval_sec as u64));
+        let validator_metrics = ValidatorMetricsValue::new(&*metrics);
         // Get the event stream for this particular node
         let mut event_stream = handle.event_stream();
         // Wait for a `Decide` event for the view number we requested
@@ -346,8 +388,10 @@ async fn start_consensus<
                             .put(non_crypto_hash(&tx_bytes), Instant::now());
                     }
                     if let Err(err) = handle.submit_transaction(TestTransaction::new(tx_bytes)).await {
+                        validator_metrics.num_tx_submit_fail.add(1); 
                         tracing::error!("Failed to submit transaction: {:?}", err);
                     } else {
+                        validator_metrics.num_tx_submitted.add(1);
                         tracing::info!("Transaction submitted successfully (size: {n})");
                     }
                 }
@@ -386,6 +430,9 @@ async fn start_consensus<
                         }
                         
                         info!("Proposed block size: {sum} bytes, num transactions: {num_transactions}");
+                        validator_metrics.num_block_proposed.add(1);
+                        validator_metrics.num_block_size_proposed.add(sum);
+                        validator_metrics.num_tx_proposed.add(num_transactions);
 
                         // Insert the size of the proposed block and the number of transactions into the cache.
                         // We use this to log the size of the proposed block when we decide on a view
