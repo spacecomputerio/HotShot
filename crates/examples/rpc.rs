@@ -5,6 +5,36 @@ use tokio::sync::mpsc::Sender;
 
 use serde_derive::{Deserialize, Serialize};
 
+use hotshot_types::traits::metrics::{Metrics, Counter, NoMetrics};
+
+/// RPC-specific metrics
+#[derive(Clone, Debug)]
+pub struct RpcMetricsValue {
+    /// The number of received RPC requests
+    pub num_recv_req: Box<dyn Counter>,
+    /// The number of txs received
+    pub num_recv_tx: Box<dyn Counter>,
+
+}
+
+impl RpcMetricsValue {
+    /// Populate the metrics with RPC-specific metrics
+    pub fn new(metrics: &dyn Metrics) -> Self {
+        let subgroup = metrics.subgroup("rpc".into());
+        Self {
+            num_recv_req: subgroup.create_counter("num_recv_req".into(), None),
+            num_recv_tx: subgroup.create_counter("num_recv_tx".into(), None),
+        }
+    }
+}
+
+impl Default for RpcMetricsValue {
+    /// Initialize with empty metrics
+    fn default() -> Self {
+        Self::new(&*NoMetrics::boxed())
+    }
+}
+
 /// RPC request structure
 #[derive(Deserialize, Serialize, Debug)]
 struct RpcRequest {
@@ -30,13 +60,15 @@ struct RpcResponse {
 }
 
 /// Starts the RPC server, returns a future that resolves when the server stops or fails
-pub async fn start_rpc(rpc_port: u16, tx_send: Sender<Vec<u8>>) {
+pub async fn start_rpc(rpc_port: u16, tx_send: Sender<Vec<u8>>, metrics: RpcMetricsValue) {
     let tx_send_filter = warp::any().map(move || tx_send.clone());
-    
+    let metrics_filter = warp::any().map(move || metrics.clone());
+
     let jrpc = warp::post()
         .and(warp::body::content_length_limit(1024 * 16))
         .and(warp::body::json())
         .and(tx_send_filter)
+        .and(metrics_filter)
         .and_then(handle_rpc_request);
 
     tracing::debug!("Starting RPC server on: 0.0.0.0:{}", rpc_port);
@@ -45,9 +77,10 @@ pub async fn start_rpc(rpc_port: u16, tx_send: Sender<Vec<u8>>) {
 }
 
 /// Handles an RPC request
-async fn handle_rpc_request(req: RpcRequest, tx_send: Sender<Vec<u8>>) -> Result<impl warp::Reply, warp::Rejection> {
+async fn handle_rpc_request(req: RpcRequest, tx_send: Sender<Vec<u8>>, metrics: RpcMetricsValue) -> Result<impl warp::Reply, warp::Rejection> {
     match req.method.as_str() {
         "ping" => {
+            metrics.num_recv_req.add(1);
             let response = RpcResponse {
                 jsonrpc: "2.0".to_string(),
                 result: json!("pong"),
@@ -56,9 +89,11 @@ async fn handle_rpc_request(req: RpcRequest, tx_send: Sender<Vec<u8>>) -> Result
             Ok(warp::reply::json(&response))
         }
         "send_txs" => {
+            metrics.num_recv_req.add(1);
             if let Some(txs) = req.params.get("txs").and_then(|v| v.as_array()) {
                 match rpc_send_txs(txs, tx_send).await {
                     Ok(()) => {
+                        metrics.num_recv_tx.add(txs.len());
                         let response = RpcResponse {
                             jsonrpc: "2.0".to_string(),
                             result: json!(true),
@@ -102,3 +137,4 @@ async fn rpc_send_txs(txs: &[serde_json::Value], tx_send: Sender<Vec<u8>>) -> Re
     }
     Ok(())
 }
+
