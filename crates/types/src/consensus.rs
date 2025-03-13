@@ -371,30 +371,32 @@ impl ConsensusMetricsValue {
     /// Create a new instance of this [`ConsensusMetricsValue`] struct, setting all the counters and gauges
     #[must_use]
     pub fn new(metrics: &dyn Metrics) -> Self {
+        let subgroup = metrics.subgroup("consensus".into());
+
         Self {
-            last_synced_block_height: metrics
+            last_synced_block_height: subgroup
                 .create_gauge(String::from("last_synced_block_height"), None),
-            last_decided_view: metrics.create_gauge(String::from("last_decided_view"), None),
-            last_voted_view: metrics.create_gauge(String::from("last_voted_view"), None),
-            last_decided_time: metrics.create_gauge(String::from("last_decided_time"), None),
-            current_view: metrics.create_gauge(String::from("current_view"), None),
-            number_of_views_since_last_decide: metrics
+            last_decided_view: subgroup.create_gauge(String::from("last_decided_view"), None),
+            last_voted_view: subgroup.create_gauge(String::from("last_voted_view"), None),
+            last_decided_time: subgroup.create_gauge(String::from("last_decided_time"), None),
+            current_view: subgroup.create_gauge(String::from("current_view"), None),
+            number_of_views_since_last_decide: subgroup
                 .create_gauge(String::from("number_of_views_since_last_decide"), None),
-            number_of_views_per_decide_event: metrics
+            number_of_views_per_decide_event: subgroup
                 .create_histogram(String::from("number_of_views_per_decide_event"), None),
-            view_duration_as_leader: metrics
+            view_duration_as_leader: subgroup
                 .create_histogram(String::from("view_duration_as_leader"), None),
-            invalid_qc: metrics.create_gauge(String::from("invalid_qc"), None),
-            outstanding_transactions: metrics
+            invalid_qc: subgroup.create_gauge(String::from("invalid_qc"), None),
+            outstanding_transactions: subgroup
                 .create_gauge(String::from("outstanding_transactions"), None),
-            outstanding_transactions_memory_size: metrics
+            outstanding_transactions_memory_size: subgroup
                 .create_gauge(String::from("outstanding_transactions_memory_size"), None),
-            number_of_timeouts: metrics.create_counter(String::from("number_of_timeouts"), None),
-            number_of_timeouts_as_leader: metrics
+            number_of_timeouts: subgroup.create_counter(String::from("number_of_timeouts"), None),
+            number_of_timeouts_as_leader: subgroup
                 .create_counter(String::from("number_of_timeouts_as_leader"), None),
-            number_of_empty_blocks_proposed: metrics
+            number_of_empty_blocks_proposed: subgroup
                 .create_counter(String::from("number_of_empty_blocks_proposed"), None),
-            internal_event_queue_len: metrics
+            internal_event_queue_len: subgroup
                 .create_gauge(String::from("internal_event_queue_len"), None),
         }
     }
