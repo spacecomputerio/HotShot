@@ -41,6 +41,11 @@ serde_derive = "1.0.217"
 hex = "0.4.3"
 prometheus = "0.13"
 pprof = { version = "0.14.0", features = ["protobuf-codec"] }
+jemalloc_pprof = "0.7.0"
+tikv-jemallocator = { version = "0.6.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms"], optional = true }
+
+[features]
+jemalloc = ["tikv-jemallocator/profiling"]
 
 [[example]]
 name = "all"

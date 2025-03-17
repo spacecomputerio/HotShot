@@ -174,10 +174,11 @@ async fn main() -> Result<()> {
     tracing::info!("Starting single-validator with args: {:?}", args);
 
     if args.pprof_dir.is_some() {
+        let pprof_dir = args.pprof_dir.unwrap().to_string();
+        let pprof_interval = args.pprof_interval;
         tokio::spawn(async move {
-            let pprof_dir = args.pprof_dir.as_ref().unwrap();
-            let pprof_interval = args.pprof_interval;
-            start_profiler(pprof_dir, pprof_interval).await;
+            let pprof_dir = pprof_dir.clone();
+            start_profiler(&pprof_dir, pprof_interval).await;
         });
     }
 
