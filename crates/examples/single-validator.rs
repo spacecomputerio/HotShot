@@ -49,6 +49,8 @@ use url::Url;
 // Include some common code
 include!("common.rs");
 
+include!("profiling.rs");
+
 /// This example runs a single validator node
 #[derive(Parser, Debug)]
 struct Args {
@@ -115,6 +117,15 @@ struct Args {
     /// The metrics interval (sec) to use to flush metrics to file system
     #[arg(long, default_value_t = 60)]
     metrics_interval: usize,
+
+    /// The directory to write pprof profiles to, e.g. '/var/logs/pprof_hotshot'
+    /// If not specified, pprof profiles are not collected
+    #[arg(long)]
+    pprof_dir: Option<String>,
+
+    /// The pprof interval (sec) to use to collect pprof profiles, default is 10 sec
+    #[arg(long, default_value_t = 10)]
+    pprof_interval: u32,
 }
 
 /// Get the IP address to use based on the source
@@ -161,6 +172,14 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     tracing::info!("Starting single-validator with args: {:?}", args);
+
+    if args.pprof_dir.is_some() {
+        tokio::spawn(async move {
+            let pprof_dir = args.pprof_dir.as_ref().unwrap();
+            let pprof_interval = args.pprof_interval;
+            start_profiler(pprof_dir, pprof_interval).await;
+        });
+    }
 
     // Match the network type
     let network_type = match args.network.to_lowercase().as_str() {
@@ -320,6 +339,7 @@ async fn main() -> Result<()> {
                 args.metrics_dir.clone(),
                 args.metrics_interval,
             );
+
             // Create the network
             let network = new_libp2p_network(
                 bind_multiaddr,
