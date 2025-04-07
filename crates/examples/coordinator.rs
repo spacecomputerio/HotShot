@@ -6,6 +6,7 @@
 
 use std::{
     collections::HashSet,
+    env,
     net::SocketAddr,
     str::FromStr,
     sync::{
@@ -23,20 +24,41 @@ use parking_lot::RwLock;
 use warp::Filter;
 
 /// The coordinator service, used to assign unique indices to nodes when running benchmarks
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 struct Args {
     /// The address to bind to
     #[arg(long, default_value = "127.0.0.1:3030")]
     bind_address: String,
+
+    #[clap(long)]
+    log_file: Option<String>,
+
+    #[clap(long)]
+    log_level: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    let _log_guard = initialize_logging_with_file();
-
     // Parse the command-line arguments
     let args = Args::parse();
+    let args_cloned = args.clone();
+    if let Some(log_file) = args_cloned.log_file {
+        env::set_var("RUST_LOG_FILE", log_file.clone());
+        println!("Using log file: {}", log_file.clone());
+    } else {
+        println!("Output log to stdout");
+    }
+    if let Some(log_level) = args_cloned.log_level {
+        env::set_var("RUST_LOG", log_level.clone());
+        println!("Using log level: {}", log_level.clone());
+    } else {
+        println!(
+            "Using log level: {}",
+            env::var("RUST_LOG").unwrap_or("".to_string())
+        );
+    }
+    // Initialize logging
+    let _log_guard = initialize_logging_with_file();
 
     tracing::info!("Starting coordinator with args: {:?}", args);
 
