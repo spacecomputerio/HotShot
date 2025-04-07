@@ -30,9 +30,11 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:3030")]
     bind_address: String,
 
+    /// Log file to write to
     #[clap(long)]
     log_file: Option<String>,
 
+    /// Log level to use
     #[clap(long)]
     log_level: Option<String>,
 }
