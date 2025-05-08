@@ -517,6 +517,16 @@ async fn start_consensus<
                 }
             }
         }
+    
+        if flush_metrics_on {
+            let file_prefix = metrics.get_prefix();
+            let metrics_folder = metrics.get_folder().unwrap();
+            if let Some(collected_metrics) = metrics.gather() { 
+                flush_metrics(&metrics_folder, file_prefix, &collected_metrics);
+            } else { 
+                tracing::error!("Failed to gather metrics"); 
+            }
+        }
     });
 
     Ok(join_handle)
