@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
     } else {
         println!(
             "Using log level: {}",
-            env::var("RUST_LOG").unwrap_or("".to_string())
+            env::var("RUST_LOG").unwrap_or_default()
         );
     }
     // Initialize logging

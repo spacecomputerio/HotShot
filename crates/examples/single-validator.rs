@@ -127,9 +127,11 @@ struct Args {
     #[arg(long, default_value_t = 10)]
     pprof_interval: u32,
 
+    /// The output log file to write to
     #[clap(long)]
     log_file: Option<String>,
 
+    /// The log level to use. This is used to set the RUST_LOG environment variable
     #[clap(long, default_value = "debug")]
     log_level: Option<String>,
 }
@@ -186,7 +188,7 @@ async fn main() -> Result<()> {
     } else {
         println!(
             "Using log level: {}",
-            env::var("RUST_LOG").unwrap_or("".to_string())
+            env::var("RUST_LOG").unwrap_or_default()
         );
     }
     // Initialize logging
