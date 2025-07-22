@@ -7,6 +7,8 @@ use hotshot_types::{
 use simple_moving_average::SingleSumSMA;
 use simple_moving_average::SMA;
 
+use hotshot_types::traits::metrics::Gauge;
+
 include!("rpc.rs");
 
 include!("metrics.rs");
@@ -24,6 +26,15 @@ pub struct ValidatorMetricsValue {
     pub num_tx_submitted: Box<dyn Counter>,
     /// The number of of failed submit attempts
     pub num_tx_submit_fail: Box<dyn Counter>,
+    /// The average size of the decided blocks
+    pub avg_block_size: Box<dyn Gauge>,
+    /// The average number of transactions in the decided blocks
+    pub avg_num_tx_in_block: Box<dyn Gauge>,
+    /// The average latency of the transactions in the decided blocks
+    pub avg_latency: Box<dyn Gauge>,
+    /// The average throughput of the decided blocks
+    /// This is the average number of bytes per second that the validator can process
+    pub avg_throughput: Box<dyn Gauge>,
 }
 
 impl ValidatorMetricsValue {
@@ -36,6 +47,10 @@ impl ValidatorMetricsValue {
             num_tx_proposed: subgroup.create_counter("num_tx_proposed".into(), None),
             num_tx_submitted: subgroup.create_counter("num_tx_submitted".into(), None),
             num_tx_submit_fail: subgroup.create_counter("num_tx_submit_fail".into(), None),
+            avg_block_size: subgroup.create_gauge("avg_block_size".into(), None),
+            avg_num_tx_in_block: subgroup.create_gauge("avg_num_tx_in_block".into(), None),
+            avg_latency: subgroup.create_gauge("avg_latency".into(), None),
+            avg_throughput: subgroup.create_gauge("avg_throughput".into(), Some("b".into())),
         }
     }
 }
@@ -312,7 +327,10 @@ async fn start_consensus<
 
     // The simple moving average, used to calculate throughput
     let mut throughput: SingleSumSMA<f64, f64, 100> = SingleSumSMA::<f64, f64, 100>::new();
-
+    // Used for calculating the size of the blocks and the number of transactions in the blocks
+    let mut block_size_sum: SingleSumSMA<u64, u64, 100> = SingleSumSMA::<u64, u64, 100>::new();
+    let mut num_transactions_sum: SingleSumSMA<u64, u64, 100> = SingleSumSMA::<u64, u64, 100>::new();
+    let mut latency_sum: SingleSumSMA<u64, u64, 100> = SingleSumSMA::<u64, u64, 100>::new();
     // The last time we decided on a view (for calculating throughput)
     let mut last_decide_time = Instant::now();
 
@@ -457,19 +475,28 @@ async fn start_consensus<
                             let average_latency = total_latency.checked_div(num_found_transactions);
 
                             // Update the throughput SMA
+                            let last_decided_time_elapsed = last_decide_time.elapsed().as_secs_f64();
                             throughput
-                                .add_sample(*block_size as f64 / last_decide_time.elapsed().as_secs_f64());
+                                .add_sample(*block_size as f64 / last_decided_time_elapsed);
 
                             // Update the last decided time
                             last_decide_time = Instant::now();
 
+                            block_size_sum.add_sample(*block_size as u64);
+                            validator_metrics.avg_block_size.set(*block_size);
+                            num_transactions_sum.add_sample(*num_transactions as u64);
+                            validator_metrics.avg_num_tx_in_block.set(*num_transactions);
                             // If we have a valid average latency, log it
                             if let Some(average_latency) = average_latency {
+                                latency_sum.add_sample(average_latency.as_millis() as u64);
+                                validator_metrics.avg_latency.set(average_latency.as_millis() as usize);
+                                let throughput_value = throughput.get_average() as u64;
+                                validator_metrics.avg_throughput.set(throughput_value as usize);
                                 info!(
                                 block_size = block_size,
                                 num_txs = num_transactions,
                                 avg_tx_latency =? average_latency,
-                                avg_throughput = format!("{}/s", bytesize::ByteSize::b(throughput.get_average() as u64)),
+                                avg_throughput = format!("{}/s", bytesize::ByteSize::b(throughput_value)),
                                 "Decided on view {}",
                                     *qc.view_number
                                 );
